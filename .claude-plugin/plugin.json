@@ -1,0 +1,45 @@
+{
+  "name": "project-board",
+  "version": "0.3.0",
+  "description": "项目状态看板：目标、步骤、事项、决策和约定记在项目里的 ai/board.json，终端里随时可看",
+  "author": {
+    "name": "a809384377"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/a809384377/claude-project-board",
+  "repository": "https://github.com/a809384377/claude-project-board",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "layout": {
+      "type": "string",
+      "title": "看板位置",
+      "description": "auto：按终端形状自动选（横屏放右侧侧边栏，竖屏放输入框上方）；right：总放右侧；bottom：总放输入框上方。",
+      "default": "auto",
+      "options": [
+        "auto",
+        "right",
+        "bottom"
+      ]
+    },
+    "motion": {
+      "type": "string",
+      "title": "动效",
+      "description": "on：在跑事项转圈、进度条上涨、礼花、小螃蟹动作；off：全部静止。Claude Code 的「减少动效」打开时也会静止。",
+      "default": "on",
+      "options": [
+        "on",
+        "off"
+      ]
+    },
+    "mascot": {
+      "type": "string",
+      "title": "小螃蟹",
+      "description": "on：在看板标题区画 Claude 小螃蟹（仅终端）；off：不画。",
+      "default": "on",
+      "options": [
+        "on",
+        "off"
+      ]
+    }
+  }
+}

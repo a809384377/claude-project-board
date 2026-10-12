@@ -1,0 +1,14 @@
+{
+  "name": "claude-project-board",
+  "description": "project-board 插件的发布仓库：跟着项目走的状态看板",
+  "owner": {
+    "name": "a809384377"
+  },
+  "plugins": [
+    {
+      "name": "project-board",
+      "source": "./",
+      "description": "项目状态看板：目标、步骤、事项、决策和约定记在项目里的 ai/board.json"
+    }
+  ]
+}
