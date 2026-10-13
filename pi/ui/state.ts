@@ -6,7 +6,7 @@ import { isoLocal } from '../../hooks/time'
 import { boardCounts } from '../../hooks/view/derive'
 import { deriveEffects, isAlive, NO_FX, textSignature, type Change, type Effects } from '../../hooks/view/effects'
 import { detectEnv, resolveTarget, type Platform } from '../../hooks/view/links'
-import { paletteFor, type RasterSpec } from '../../hooks/view/motion'
+import { paletteFor, type Palette, type RasterSpec } from '../../hooks/view/motion'
 import { CALM_AFTER_MS, Ticker } from '../../hooks/view/ticker'
 import { makeActions, renderBoard, renderEntry, shownLinks, STAMP_MS, type Actions, type Els, type StoreActions, type ViewModel } from '../gen/board.js'
 import { draw, els, type Drawn, type Hit, type Node } from './engine'
@@ -28,6 +28,8 @@ export type UiEnv = {
  */
 export class BoardUi {
   appearance: 'dark' | 'light' = 'dark'
+  /** pi's accent colour (0xRRGGBB): the board's brand colour here, in place of Claude's orange. */
+  accent = 0xb48ee0
   stale = false
   private expanded: Record<string, boolean> = {}
   private stamps: Readonly<Record<string, number>> = {}
@@ -68,6 +70,11 @@ export class BoardUi {
       },
     )
     this.ticker.setEnabled(env.motion)
+  }
+
+  /** The colours the board is drawn in: the theme's, with the brand colour (frame, title area, figure) replaced by pi's accent. */
+  palette(): Palette {
+    return { ...(paletteFor(this.appearance) as Palette), claude: this.accent }
   }
 
   private render(): void {
@@ -205,8 +212,9 @@ export class BoardUi {
       hasCode: amb.hasCode,
       canvas: true,
       width,
-      palette: paletteFor(this.appearance),
+      palette: this.palette(),
       mascot: this.env.mascot,
+      mascotKind: 'pi',
       motion: this.env.motion,
       now,
       calm: now - this.lastActive >= CALM_AFTER_MS,
@@ -222,7 +230,7 @@ export class BoardUi {
     const tree = renderBoard(els as unknown as Els, this.vm(width, mode, specs), this.actions, mode) as unknown as Node
     if (specs.length === 0) this.ticker.unmounted(site)
     else this.ticker.mounted(site, specs)
-    return draw(tree, width, paletteFor(this.appearance) as NonNullable<ReturnType<typeof paletteFor>>)
+    return draw(tree, width, this.palette())
   }
 
   /** The one-line entry of a folded board. */
@@ -230,7 +238,7 @@ export class BoardUi {
     this.ticker.unmounted('band')
     this.ticker.unmounted('pane')
     const tree = renderEntry(els as unknown as Els, { board: this.env.store.current().board, stale: this.stale }, async () => onOpen()) as unknown as Node
-    return draw(tree, width, paletteFor(this.appearance) as NonNullable<ReturnType<typeof paletteFor>>)
+    return draw(tree, width, this.palette())
   }
 
   /** The canvases of `site` are no longer on screen. */

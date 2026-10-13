@@ -6,7 +6,7 @@
 
 type Component = { render(width: number): string[]; invalidate(): void }
 type Tui = { setLayoutRoot(c: unknown): void; requestRender(force?: boolean): void; terminal: { columns: number; rows: number } }
-type Lib = { HStack: new (children: unknown[]) => unknown; isViewportTUI: (t: unknown) => boolean }
+type Lib = { HStack: new (children: unknown[]) => unknown; isViewportTUI: (t: unknown) => boolean; colorToHex?: (c: unknown) => string }
 
 let lib: Lib | null = null
 const loading: Promise<void> = import('@earendil-works/pi-tui')
@@ -80,5 +80,17 @@ export class Dock {
     } catch {
       // the terminal was replaced
     }
+  }
+}
+
+/** pi's own accent colour, from the theme in use, as 0xRRGGBB; null when it cannot be read. */
+export function accentOf(theme: unknown): number | null {
+  try {
+    const color = (theme as { colors?: Record<string, unknown> }).colors?.accent
+    const text = color === undefined ? undefined : lib?.colorToHex?.(color)
+    const n = text === undefined ? Number.NaN : Number.parseInt(text.replace('#', ''), 16)
+    return Number.isFinite(n) ? n : null
+  } catch {
+    return null
   }
 }

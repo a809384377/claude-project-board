@@ -218,12 +218,16 @@ export const MASCOT_ROWS = 3
 const W = 18
 const H = 6
 
+/** Which figure the mascot is: Claude Code's crab, or pi's π (a bar with two legs). */
+export type MascotKind = 'claude' | 'pi'
+
 export type Pixels = Array<Array<number | null>>
 export type Overlay = { col: number; row: number; ch: string; fg: number }
 
 const QUAD = ' ▘▝▀▖▌▞▛▗▚▐▜▄▙▟█'
 
-export function mascotPixels(mode: MascotMode, running: number, p: Palette | null, o: FrameOpts = {}): { px: Pixels; over: Overlay[] } {
+export function mascotPixels(mode: MascotMode, running: number, p: Palette | null, o: FrameOpts = {}, kind: MascotKind = 'claude'): { px: Pixels; over: Overlay[] } {
+  if (kind === 'pi') return piPixels(mode, running, p, o)
   const t = o.t ?? 0
   const m = o.animated === true
   const body = hue(p, 'claude')
@@ -271,6 +275,65 @@ export function mascotPixels(mode: MascotMode, running: number, p: Palette | nul
     sparks.forEach(([x, y], i) => {
       const k = m ? Math.floor(t / (MASCOT_POSE_MS / 2)) + i : i + 1
       if (k % 3 !== 0) set(x, y, pal[k % 4] as number)
+    })
+  }
+  return { px, over }
+}
+
+// pi's mark: the letter π as a character, 18 x 6 pixels. A bar with an overhang is the head (the eyes are holes in it),
+// and the two legs are π's two strokes, the right one with the foot curl of the letter.
+//   ▗▄▄▄▄▄▄▄▖     row 0-1: hands and sparks above, the overhanging bar
+//    ▐▛▘██▘▜▌     rows 2-3: the head under it
+//     ██  ▐█▌     rows 4-5: legs
+const PI = ['..................', '..##############..', '...##.######.##...', '...############...', '....##......##....', '....##......###...']
+
+function piPixels(mode: MascotMode, running: number, p: Palette | null, o: FrameOpts): { px: Pixels; over: Overlay[] } {
+  const t = o.t ?? 0
+  const m = o.animated === true
+  const body = hue(p, 'claude')
+  const lid = mix(body, 0x000000, 0.35)
+  const px: Pixels = PI.map(row => [...row].map(ch => (ch === '#' ? body : null)))
+  const set = (x: number, y: number, c: number | null): void => {
+    if (x >= 0 && x < W && y >= 0 && y < H) (px[y] as Array<number | null>)[x] = c
+  }
+  const step = m ? Math.floor(t / MASCOT_POSE_MS) : 0
+  const f2 = step % 2
+  // The arms rest at (1..2, 3) and (15..16, 3), at the head's sides; a pose clears them and puts them elsewhere.
+  const arms = (left: Array<[number, number]>, right: Array<[number, number]>): void => {
+    for (const x of [1, 2, 15, 16]) set(x, 3, null)
+    for (const [x, y] of [...left, ...right]) set(x, y, body)
+  }
+  const over: Overlay[] = []
+  const blink = m && mode !== 'sleep' && t % 3400 < 140
+  if (mode === 'sleep' || blink) {
+    set(5, 2, lid)
+    set(12, 2, lid)
+  }
+  if (mode === 'huh') set(12, 2, lid)
+  if (mode === 'work') {
+    arms(f2 ? [[1, 2], [2, 2]] : [[1, 3], [2, 3]], f2 ? [[15, 3], [16, 3]] : [[15, 2], [16, 2]])
+    const spots: Array<[number, number]> = [[17, 0], [0, 0]]
+    for (let i = 0; i < Math.min(running, 2); i++) {
+      const k = m ? step + i : 1
+      const at = spots[i] as [number, number]
+      if (k % 3 !== 0) set(at[0], at[1], k % 2 === 1 ? hue(p, 'warning') : mix(body, 0xffffff, 0.4))
+    }
+  } else if (mode === 'wave') {
+    arms([[1, 3], [2, 3]], f2 ? [[15, 3], [16, 2], [17, 2]] : [[15, 3], [16, 2], [17, 1]])
+  } else if (mode === 'huh') {
+    arms(f2 ? [[2, 3], [1, 2]] : [[2, 3], [2, 2]], [[15, 3], [16, 3]])
+    if (!m || step % 2 === 0) over.push({ col: 8, row: 0, ch: '?', fg: hue(p, 'suggestion') })
+  } else if (mode === 'sleep') {
+    over.push({ col: 8, row: 0, ch: 'z', fg: hue(p, 'inactive') })
+  } else {
+    arms([[2, 3], [1, 2], [0, 1]], [[15, 3], [16, 2], [17, 1]])
+    if (f2 === 1) for (const x of [4, 5, 12, 13, 14]) set(x, 5, null)
+    const pal = [hue(p, 'warning'), hue(p, 'success'), hue(p, 'suggestion'), 0xf0948f]
+    // Two sparks in the free corners, a pair of pixels each: a cell takes one colour besides the sky.
+    const sparks: Array<Array<[number, number]>> = [[[0, 4], [1, 5]], [[17, 4], [16, 5]]]
+    sparks.forEach((pair, i) => {
+      const k = m ? Math.floor(t / (MASCOT_POSE_MS / 2)) + i : i + 1
+      if (k % 3 !== 0) for (const [x, y] of pair) set(x, y, pal[k % 4] as number)
     })
   }
   return { px, over }
@@ -360,8 +423,8 @@ export function confettiCells(seed: number, cols: number, rows: number, elapsed:
   return quadGrid(px, cols, rows, [], bg)
 }
 
-export function mascotCells(mode: MascotMode, running: number, p: Palette | null, o: FrameOpts = {}): { cells: Cell[]; dropped: number } {
-  const { px, over } = mascotPixels(mode, running, p, o)
+export function mascotCells(mode: MascotMode, running: number, p: Palette | null, o: FrameOpts = {}, kind: MascotKind = 'claude'): { cells: Cell[]; dropped: number } {
+  const { px, over } = mascotPixels(mode, running, p, o, kind)
   return quadCells(px, over, titleBg(p))
 }
 

@@ -9,7 +9,7 @@ import { handleTool, specsFor } from '../hooks/tools'
 import { isoLocal } from '../hooks/time'
 import { nodeHost } from './host'
 import { toolDefinition } from './tools'
-import { Dock, dockReady } from './ui/dock'
+import { accentOf, Dock, dockReady } from './ui/dock'
 import { BandView, PaneView } from './ui/surfaces'
 import { BoardUi } from './ui/state'
 import { parseSetting, wantsPane, type LayoutSetting } from '../hooks/view/layout'
@@ -187,6 +187,7 @@ class Runtime {
           return {
             render: (width: number): string[] => {
               this.ui.appearance = (theme as unknown as Themed).appearance === 'light' ? 'light' : 'dark'
+              this.ui.accent = accentOf(theme) ?? this.ui.accent
               const mode = this.surface(t, dock)
               this.settle(mode, t, dock)
               if (mode === 'pane') return []

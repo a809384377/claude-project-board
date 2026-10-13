@@ -190,7 +190,7 @@ function titleArea(c, b) {
   const mile = mileText(b);
   const mascot = vm.mascot && canvas(c, "mascot", MASCOT_COLS, MASCOT_ROWS, (o) => {
     const mode = mascotMode({ cheering: (o.t ?? 0) < vm.fx.cheerUntil, waiting: counts.review + b.proposals.length > 0, stale: vm.stale, running: counts.running });
-    return mascotCells(mode, counts.running, vm.palette, o).cells;
+    return mascotCells(mode, counts.running, vm.palette, o, vm.mascotKind ?? "claude").cells;
   });
   return h(Box, {
     flexDirection: "row",

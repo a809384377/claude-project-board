@@ -54,6 +54,7 @@ import {
   MASCOT_COLS,
   MASCOT_ROWS,
   mascotCells,
+  type MascotKind,
   mascotMode,
   spinCells,
   tint,
@@ -95,6 +96,8 @@ export interface ViewModel {
   palette: Palette | null
   /** The mascot is switched on. */
   mascot: boolean
+  /** Which figure it is; Claude Code's crab when absent. */
+  mascotKind?: MascotKind
   /** Frames move with `now`; false draws the still frame of everything. */
   motion: boolean
   /** The time this drawing is for, in milliseconds; 0 for the still frame. */
@@ -275,7 +278,7 @@ function titleArea(c: Ctx, b: Board): RenderElement {
     vm.mascot &&
     canvas(c, 'mascot', MASCOT_COLS, MASCOT_ROWS, o => {
       const mode = mascotMode({ cheering: (o.t ?? 0) < vm.fx.cheerUntil, waiting: counts.review + b.proposals.length > 0, stale: vm.stale, running: counts.running })
-      return mascotCells(mode, counts.running, vm.palette, o).cells
+      return mascotCells(mode, counts.running, vm.palette, o, vm.mascotKind ?? 'claude').cells
     })
   return (
     <Box flexDirection="row" {...(bg === DEF ? {} : { backgroundColor: hex(bg) })}>

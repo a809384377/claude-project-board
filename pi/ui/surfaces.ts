@@ -1,4 +1,3 @@
-import { paletteFor } from '../../hooks/view/motion'
 import { Grid, rowToAnsi, type Drawn, type Hit } from './engine'
 import type { BoardUi } from './state'
 
@@ -43,7 +42,7 @@ export class PaneView {
   render(width: number): string[] {
     const rows = Math.max(4, this.sink.rows())
     const inner = Math.max(10, width - 2)
-    const pal = paletteFor(this.ui.appearance)
+    const pal = this.ui.palette()
     const d: Drawn = this.ui.board(inner, 'pane', 'pane')
     const body = rows - 2
     this.width = width
@@ -51,7 +50,7 @@ export class PaneView {
     this.offset = Math.min(Math.max(0, this.offset), this.maxOffset)
     this.hits = d.hits
     const g = new Grid(width, rows)
-    const fg = pal === null ? null : pal.claude
+    const fg = pal.claude
     const put = (x: number, y: number, ch: string, bold = false, dim = false): void => {
       const cell = g.at(x, y)
       if (cell === undefined) return

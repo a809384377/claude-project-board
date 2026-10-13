@@ -148,6 +148,21 @@ describe('mascot', () => {
       }
     }
   })
+  test("pi's figure: the same holds for the π, and it is a different picture from the crab", () => {
+    for (const p of [null, paletteFor('dark'), paletteFor('light')]) {
+      for (const mode of MODES) {
+        for (let t = 0; t < 7000; t += 50) for (const running of [0, 1, 2, 5]) {
+          const { px, over } = mascotPixels(mode, running, p, { t, animated: true }, 'pi')
+          expect(quadCells(px, over, titleBg(p)).dropped).toBe(0)
+        }
+        const a = art(mascotCells(mode, 2, null, {}, 'pi').cells)
+        expect(a).toHaveLength(3)
+        expect(a).not.toEqual(art(mascotCells(mode, 2, null).cells))
+      }
+    }
+    // The bar overhangs the head, and the π stands on two legs (the right one with a foot).
+    expect(art(mascotCells('wave', 0, null, {}, 'pi').cells)).toEqual([' ▄▄▄▄▄▄▄▗', '▗▟▙███▟▙▘', '  █   █▖ '])
+  })
   test('a block that does hold three colours keeps the two most frequent and counts the rest as lost', () => {
     const px = Array.from({ length: 6 }, () => Array<number | null>(18).fill(null))
     px[0]![0] = 0x111111
