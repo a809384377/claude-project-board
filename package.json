@@ -1,0 +1,17 @@
+{
+  "name": "project-board",
+  "version": "0.3.0",
+  "description": "项目状态看板：目标、步骤、事项、决策和约定记在项目里的 ai/board.json。Claude Code 插件，同一份看板也可在 pi 里用。",
+  "keywords": ["pi-package"],
+  "license": "MIT",
+  "pi": {
+    "extensions": ["./pi/project-board.ts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "scripts": {
+    "test:pi": "bun test pi/tests",
+    "gen:pi": "bun pi/scripts/gen-board.ts"
+  }
+}

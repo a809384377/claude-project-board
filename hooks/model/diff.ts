@@ -113,7 +113,7 @@ export function describeChanges(before: Board, after: Board, actor: string): str
     const o = old.item
     const n = now.item
     if (o.title !== n.title) say(`事项「${clip(o.title)}」改名为「${clip(n.title)}」`)
-    if (o.status !== n.status) say(`${name}：${zh(o.status)} → ${zh(n.status)}${n.status === 'done' && n.doneBy ? `（${n.doneBy === 'user' ? '用户验收' : 'Claude 验收'}）` : ''}`)
+    if (o.status !== n.status) say(`${name}：${zh(o.status)} → ${zh(n.status)}${n.status === 'done' && n.doneBy ? `（${n.doneBy === 'user' ? '用户验收' : 'AI 验收'}）` : ''}`)
     if (old.goal.id !== now.goal.id && absorbed.get(old.goal.id) !== now.goal.id) say(`${name}移到目标「${clip(now.goal.title)}」`)
     if (o.stepId !== n.stepId && !(absorbed.get(old.goal.id) === now.goal.id)) {
       const st = now.goal.steps.find(x => x.id === n.stepId)
@@ -159,7 +159,7 @@ export function describeChanges(before: Board, after: Board, actor: string): str
   const bd = byId(before.decisions)
   for (const d of after.decisions) {
     const old = bd.get(d.id)
-    if (!old) say(`记录决策「${clip(d.text, 40)}」（${d.kind === 'user' ? '用户定' : 'Claude 代做'}）`)
+    if (!old) say(`记录决策「${clip(d.text, 40)}」（${d.kind === 'user' ? '用户定' : 'AI 代做'}）`)
     else if (old.status !== d.status) say(`决策「${clip(d.text, 40)}」${d.status === 'superseded' ? '已被替代' : '恢复生效'}`)
     else if (old.text !== d.text) say(`决策改为「${clip(d.text, 40)}」`)
   }

@@ -81,7 +81,7 @@ function listing(title: string, command: string, lines: string[], count: number,
   return { text: `${head}\n${body.join('\n')}${next}` }
 }
 
-const kindLabel = (d: Decision): string => (d.kind === 'user' ? '用户定' : 'Claude 代做')
+const kindLabel = (d: Decision): string => (d.kind === 'user' ? '用户定' : 'AI 代做')
 
 function decisionLine(d: Decision, goalTitle: string): string {
   const quote = d.quote ? `（原话：${clip(d.quote, 80)}）` : ''

@@ -112,7 +112,7 @@ describe('/board 决策', () => {
     const rows = (await run('决策', b)).split('\n')
     expect(rows[0]).toBe('决策 · 共 3 条')
     expect(rows[1]).toBe('d-2 · 2026-10-10 · 用户定 · [车辆] 新的（原话：车全部自建）')
-    expect(rows[2]).toBe('d-3 · 2026-10-09 · Claude 代做 · [项目] 项目级')
+    expect(rows[2]).toBe('d-3 · 2026-10-09 · AI 代做 · [项目] 项目级')
     expect(rows[3]).toContain('d-1')
     expect(rows.join('\n')).not.toContain('已被替代')
   })

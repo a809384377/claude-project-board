@@ -253,7 +253,7 @@ function decisionsSection(b: Board, room: number): string {
     .map(x => x.d)
   const head = `## 决策（进行中目标与项目级，生效 ${list.length} 条，最近的在前）`
   if (list.length === 0) return `${head}\n（暂无）`
-  const units = list.map(d => [`- ${d.date} ${field(d.text)}${d.kind === 'delegated' ? '（Claude 代做）' : ''}`])
+  const units = list.map(d => [`- ${d.date} ${field(d.text)}${d.kind === 'delegated' ? '（AI 代做）' : ''}`])
   return fill(head, units, n => `另有 ${n} 条，用 board_get decisions 查看`, room)
 }
 

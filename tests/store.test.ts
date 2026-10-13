@@ -314,7 +314,7 @@ describe('commit', () => {
     expect(boardOf(disk).rev).toBe(2)
   })
 
-  test('file rewritten between our read and our write: the later write wins (design 4.6, accepted risk)', async () => {
+  test('file rewritten between our read and our write: the commit starts over on the new content, nothing is lost', async () => {
     let external: (() => void) | null = null
     const { disk, store } = seeded({
       beforeWrite: p => {
@@ -330,10 +330,53 @@ describe('commit', () => {
       disk.put(BOARD, serializeBoard({ ...b, rev: b.rev + 1, notes: [{ id: 'n-ext000', title: 'ext', text: '', group: '' }] }))
     }
     const r = await store.commit(addNote('ours'), 'main')
+    expect(r).toMatchObject({ ok: true, rev: 2 })
+    expect(boardOf(disk).notes.map(n => n.title)).toEqual(['ext', 'ours'])
+    expect(disk.text(TMP)).toBeUndefined()
+  })
+
+  test('a board that keeps being rewritten: the commit gives up without writing, and says so', async () => {
+    let bump = 0
+    const { disk, store } = seeded({
+      beforeWrite: p => {
+        if (p !== TMP) return
+        const b = boardOf(disk)
+        disk.put(BOARD, serializeBoard({ ...b, rev: b.rev + 1, notes: [{ id: 'n-ext000', title: `ext${++bump}`, text: '', group: '' }] }))
+      },
+    })
+    await store.locate()
+    const r = await store.commit(addNote('ours'), 'main')
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.reason).toContain('反复改写')
+    expect(boardOf(disk).notes.map(n => n.title)).toEqual([`ext${bump}`])
+    expect(disk.text(TMP)).toBeUndefined()
+  })
+
+  test('the same check guards the in-place write where mv is not available', async () => {
+    let external: (() => void) | null = null
+    const disk = new Disk()
+    disk.put(BOARD, serializeBoard(emptyBoard('demo')))
+    const host = fakeHost(disk, '/proj', { noProcess: true })
+    const read = host.readText.bind(host)
+    let reads = 0
+    host.readText = async p => {
+      const t = await read(p)
+      if (p === BOARD && ++reads === 1 && external) {
+        external()
+        external = null
+      }
+      return t
+    }
+    const store = new BoardStore(host)
+    await store.locate()
+    external = () => {
+      const b = boardOf(disk)
+      disk.put(BOARD, serializeBoard({ ...b, rev: b.rev + 1, notes: [{ id: 'n-ext000', title: 'ext', text: '', group: '' }] }))
+    }
+    reads = 0
+    const r = await store.commit(addNote('ours'), 'main')
     expect(r).toMatchObject({ ok: true })
-    const titles = boardOf(disk).notes.map(n => n.title)
-    expect(titles).toEqual(['ours'])
-    expect(titles).not.toContain('ext')
+    expect(boardOf(disk).notes.map(n => n.title)).toEqual(['ext', 'ours'])
   })
 
   test('result carries the board as it was before the write', async () => {

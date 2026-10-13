@@ -5,8 +5,10 @@ import type { BoardStore, Change } from './store'
 
 export const UNTOLD_LIMIT = 1500
 
-const EDIT_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit'])
-const AGENT_TOOL = 'Agent'
+/** Which tool names count as editing files and as spawning agents; each host names its tools differently. */
+export type ToolNames = { edit: ReadonlySet<string>; agent: ReadonlySet<string> }
+
+export const CLAUDE_TOOLS: ToolNames = { edit: new Set(['Edit', 'Write', 'NotebookEdit']), agent: new Set(['Agent']) }
 
 /** What a user submission looks like: not sent into a running turn, and typed by a person or the SDK host. */
 export function isUserSubmission(e: { turnId?: string | undefined; origin: { kind: string } }): boolean {
@@ -25,6 +27,7 @@ export class TurnCounter {
   private edits = 0
   private agents = 0
   private board = 0
+  constructor(private readonly names: ToolNames = CLAUDE_TOOLS) {}
   reset(): void {
     this.edits = 0
     this.agents = 0
@@ -33,8 +36,8 @@ export class TurnCounter {
   /** `isBoardWrite` marks a successful board write; any other call is classified by tool name. */
   count(toolName: string, isBoardWrite: boolean): void {
     if (isBoardWrite) this.board++
-    else if (EDIT_TOOLS.has(toolName)) this.edits++
-    else if (toolName === AGENT_TOOL) this.agents++
+    else if (this.names.edit.has(toolName)) this.edits++
+    else if (this.names.agent.has(toolName)) this.agents++
   }
   verdict(): { stale: boolean; edits: number; agents: number } {
     return { stale: this.edits + this.agents > 0 && this.board === 0, edits: this.edits, agents: this.agents }
@@ -44,17 +47,19 @@ export class TurnCounter {
 const ACTOR_LABEL = { external: '外部', main: '主会话', agent: '子 agent', user: '用户' } as const
 
 /**
- * Keeps what Claude knows of the board: the prompt snapshot, the changes it was not told about,
+ * Keeps what the AI knows of the board: the prompt snapshot, the changes it was not told about,
  * and the end-of-turn bookkeeping verdict. Values live in $.state; this object only serializes access.
  */
 export class Sync {
-  readonly turn = new TurnCounter()
+  readonly turn: TurnCounter
   private tail: Promise<unknown> = Promise.resolve()
 
   constructor(
     private readonly host: Host,
     private readonly store: BoardStore,
+    tools: ToolNames = CLAUDE_TOOLS,
   ) {
+    this.turn = new TurnCounter(tools)
     store.onChange(c => void this.serial(() => this.apply(c)))
   }
 

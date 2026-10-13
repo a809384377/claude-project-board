@@ -1,6 +1,6 @@
 # project-board · 项目状态看板
 
-一个 Claude Code 插件：在终端里给你的项目放一块**跟着项目走、跨会话不丢的状态看板**。
+一个 Claude Code 插件（也能在 [pi](#在-pi-里使用) 里用）：在终端里给你的项目放一块**跟着项目走、跨会话不丢的状态看板**。
 
 做一个稍大的项目时，常见的烦恼是：Claude 每次新开会话都不记得上次做到哪、你拍过什么板、有哪些约定。project-board 把这些记在项目里的一个文件（`ai/board.json`）里：目标、步骤、事项、你做过的决策、项目约定、资料。Claude 开工前自动读到它，干完活随手更新它；你在终端里一眼看到「现在关注什么、谁在跑、什么在等我验收」，并可以直接点按钮验收、同意提议、打开验收入口。
 
@@ -94,6 +94,38 @@
 - 新开 sprint、结束 sprint 时，Claude 会在看板上提议建目标、关闭目标，出现在待确认卡片里，你点同意才生效。
 - 在已有 sprint 的项目里创建看板时，每个进行中的 sprint 会自动生成一条待确认的目标提议（标题取 `BRIEF.md` 的第一个标题），不同意就点「不要」。
 
+## 在 pi 里使用
+
+同一个项目里，Claude Code 和 [pi](https://pi.dev) 可以共用同一份 `ai/board.json`：谁改了看板，另一边会在下一条消息时被告知「外部：……」，两边的约定、决策、目标进度不会各记各的。
+
+安装（本地仓库路径，或把仓库当作 pi 包）：
+
+```
+pi install /path/to/claude-project-board
+pi install git:github.com/a809384377/claude-project-board     # 发布后
+pi -e ./pi/project-board.ts                                    # 只试用一次，不写入设置
+```
+
+在 pi 里能用的：
+
+- **四个工具**：`board_get`、`board_update`、`board_propose`、`board_init`，与 Claude Code 里同名同参。项目里没有看板时只有 `board_init`（走 tool search，不占上下文）。
+- **会话开始的看板快照**：作为系统提示的一个段落（`<project_board>`）注入，整个会话内文字不变；别处的改动和「看板没更新」的提醒，随你的下一条消息带进去。
+- **`/board` 命令**：和 Claude Code 版相同（`决策` `约定` `资料` `归档` `init`），列表输出会进入对话；不带参数是收起 / 展开输入框上方的看板。
+- **和 Claude Code 版同一块看板**：同一份界面代码（`hooks/view/board.tsx`）在 pi 里照样画——像素小螃蟹和计数药丸、「待你处理」框、目标的竖条与电池进度条、步骤条、验收入口按钮、动效。横屏（全屏模式、宽 ≥ 100 列且行数 × 2 ≤ 列数）时停靠在右侧，竖屏或窄屏时画在输入框上方；`[-]` 或 `/board` 收起成一行，再点一行或 `/board` 展开。
+- **用鼠标操作**：点按钮（验收通过、同意 / 不要、打开、VS Code、复制路径、设为关注）、点目标 / 步骤 / 事项展开折叠、滚轮滚动放不下的部分。验收和同意写入时记为你本人。
+- 环境变量：`PI_PROJECT_BOARD_LAYOUT=auto|right|bottom`（默认 auto：按屏幕形状；right 总是右侧，bottom 总是输入框上方）、`PI_PROJECT_BOARD_WIDGET=compact`（启动时收起成一行）或 `off`（不显示）、`PI_PROJECT_BOARD_MOTION=off`（关闭动效）。颜色用终端的真彩色（`COLORTERM=truecolor`），否则降到 256 色。
+
+和 Claude Code 版的差别：
+
+- 右侧停靠依赖 pi 的全屏模式（默认）和它的布局内部接口；`--tui-mode regular` 或停靠失败时，看板退回输入框上方，且**不能用鼠标**：对 AI 说「同意」，它会带着你的原话调用 `board_propose` 执行；验收事项同理，对它说「这个通过了」。
+- 输入框上方的看板最多占约 45% 屏高（常规模式为屏高减 12 行），放不下的部分靠滚轮（仅全屏模式）。
+- pi 的子 agent（`PI_SUBAGENT_CHILD=1` 的进程）只能提议，不能代你同意，也不注入快照、不显示看板。
+- 「看板落后」的检查把 pi 的 `edit` / `write` 和 `subagent` 工具算作改了文件 / 派了 agent。
+
+两个宿主同时写同一个文件时，写入前会再读一次文件：发现别处刚改过就在新内容上重做（最多 4 次），不会盖掉对方的改动；极短的窗口（两个进程在几毫秒内同时提交）仍可能丢一次更新。
+
+开发：改了 `hooks/view/board.tsx` 之后运行 `bun pi/scripts/gen-board.ts` 重新生成 `pi/gen/board.js`（pi 的加载器不支持 JSX；`bun test pi/tests` 里有检查生成物是否过期）。`bun test pi/tests`（pi 适配层，与 `claude plugin test .` 互不干扰：pi 的测试文件叫 `*.spec.ts`）。
+
 ## 兼容性
 
 - 需要 Claude Code **2.1.287 或更新**（插件系统中的 mod 支持），在 **2.1.296** 上测试通过。
@@ -134,7 +166,7 @@ npx -y -p typescript@5.6.3 tsc -p tsconfig.json   # 类型检查，应无输出
 
 本地试用改动：`claude --plugin-dir .`，改了源码后在会话里 `/reload-plugins`。
 
-目录结构：`hooks/` 是插件代码（`register.ts` 为入口；`model/` 是看板数据与规则，`view/` 是界面，`store.ts` 管读写，`tools.ts` 注册 Claude 用的工具），`tests/` 是测试，`types/` 是插件自己的状态类型声明。
+目录结构：`pi/` 是 pi 的适配层（`project-board.ts` 为入口，复用 `hooks/` 里与宿主无关的部分；`ui/` 是画 Claude 版同一棵界面树的小渲染器和停靠 / 滚动 / 点击，`gen/` 是 board.tsx 的生成物），`hooks/` 是插件代码（`register.ts` 为入口；`model/` 是看板数据与规则，`view/` 是界面，`store.ts` 管读写，`tools.ts` 注册 Claude 用的工具），`tests/` 是测试，`types/` 是插件自己的状态类型声明。
 
 ## 数据结构
 
@@ -215,7 +247,7 @@ npx -y -p typescript@5.6.3 tsc -p tsconfig.json   # 类型检查，应无输出
 | 字段 | 说明 |
 |---|---|
 | `id` `date` `text` | 编号、日期、内容 |
-| `kind` | `user` 用户定 · `delegated` Claude 代做 |
+| `kind` | `user` 用户定 · `delegated` AI 代做 |
 | `goalId` | 所属目标；空字符串表示项目级 |
 | `quote` | 可选，用户原话 |
 | `supersedes` | 可选，被替代的决策 id |

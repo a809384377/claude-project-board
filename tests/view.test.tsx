@@ -324,7 +324,7 @@ for (const surface of SURFACES) {
       expect(await ui.find({ type: 'Text', text: /车身生成器/ })).toBeUndefined()
       await ui.press({ key: 'done:g-car' })
       expect(await texts(ui, /车身生成器（你验收）/)).toHaveLength(1)
-      expect(await texts(ui, /车牌贴图（Claude 验收）/)).toHaveLength(1)
+      expect(await texts(ui, /车牌贴图（AI 验收）/)).toHaveLength(1)
       const user = await ui.find({ type: 'Text', text: /车身生成器/ })
       const claude = await ui.find({ type: 'Text', text: /车牌贴图/ })
       // Who accepted an item no longer shows in colour: both are plain grey

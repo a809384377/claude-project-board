@@ -5,7 +5,7 @@ import { goalShortName, goalState, STEP_ICON, stepShortName } from '../model/der
 import { applyOps, type ApplyResult, type OpCtx } from '../model/ops'
 import { NEWER_SCHEMA_TEXT } from '../model/parse'
 import { approve, propose, reject } from '../model/propose'
-import type { Board, Goal, Item, ItemStatus, Link, Proposal } from '../model/types'
+import type { Board, Goal, Item, ItemStatus, Link } from '../model/types'
 import type { BoardStore } from '../store'
 import {
   ATTENTION_LIMIT,
@@ -29,6 +29,8 @@ import {
   type Unit,
 } from './derive'
 import { rippleStep, type Effects } from './effects'
+import { clip, describeProposal, entryText, STATUS_ICON } from './text'
+export { describeProposal, entryText } from './text'
 import { linkActions, pressLink, resolveTarget, type LinkAction, type Platform } from './links'
 import {
   CHIP_LABEL,
@@ -135,9 +137,6 @@ type Ctx = { els: Els; vm: ViewModel; actions: Actions; mode: Mode; budget: Budg
 
 // ---------- pure helpers (also used by register.ts) ----------
 
-const STATUS_ICON: Record<ItemStatus, string> = { todo: '○', queued: '⏸', doing: '◐', running: '●', review: '◆', done: '✓', dropped: '⊘' }
-
-const clip = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n)}…` : s)
 const firstLine = (s: string): string => clip((s.split('\n')[0] ?? '').trim(), 200)
 const isMine = (it: Item, vm: ViewModel): boolean => it.session === vm.sessionId && it.session !== ''
 
@@ -167,54 +166,6 @@ function mileText(b: Board): string {
   const last = now[now.length - 1]
   if (last === undefined) return ''
   return `阶段：${clip(last.title, 60)}${now.length > 1 ? `（另有 ${now.length - 1} 个进行中）` : ''}`
-}
-
-export function describeProposal(b: Board, p: Proposal): string {
-  const goalTitle = (id: unknown): string => b.goals.find(g => g.id === id)?.title ?? String(id)
-  const pl = p.payload
-  switch (p.action) {
-    case 'goal.create':
-      return `新建目标：${String(pl.title)}`
-    case 'goal.update':
-      return `修改目标「${goalTitle(pl.goalId)}」${typeof pl.title === 'string' ? `，标题改为：${pl.title}` : ''}`
-    case 'goal.close':
-      return `关闭目标「${goalTitle(pl.goalId)}」（${String(pl.reason)}）`
-    case 'goal.merge': {
-      const ids = Array.isArray(pl.goalIds) ? (pl.goalIds as string[]) : []
-      const names = ids.map(id => `「${clip(goalTitle(id), 8)}」`)
-      const paused = ids.map(id => b.goals.find(g => g.id === id)).filter(g => g?.status === 'paused').map(g => `「${clip(g?.title ?? '', 8)}」`)
-      // No spaces in this sentence: the terminal wraps only at spaces, so one space strands the rest of it on a new line.
-      return `把${names.slice(0, 2).join('')}${ids.length > 2 ? '等' : ''}${ids.length}个目标合并为「${String(pl.title)}」的步骤${paused.length > 0 ? `（含暂停的${paused.join('')}，合并后一并恢复）` : ''}`
-    }
-    case 'goal.pause':
-      return `暂停目标「${goalTitle(pl.goalId)}」`
-    case 'goal.resume':
-      return `恢复目标「${goalTitle(pl.goalId)}」`
-    case 'focus.set':
-      return `把关注改为：${String(pl.text)}`
-  }
-}
-
-/** The one line shown when the pane is not on screen. */
-export function entryText(vm: Pick<ViewModel, 'board' | 'stale'>): string {
-  const warn = vm.stale ? ' ⚠' : ''
-  if (vm.board === null) return `看板${warn} · 文件无法读取 · /board 查看`
-  let running = 0
-  let review = 0
-  for (const g of vm.board.goals) {
-    for (const it of g.items) {
-      if (it.status === 'running') running++
-      else if (it.status === 'review') review++
-    }
-  }
-  const asks = vm.board.proposals.length
-  const parts = [`看板${warn}`]
-  if (running > 0) parts.push(`在跑 ${running}`)
-  if (review > 0) parts.push(`待验收 ${review}`)
-  if (asks > 0) parts.push(`待确认 ${asks}`)
-  if (parts.length === 1) parts.push('暂无进行中事项')
-  parts.push('/board 打开')
-  return parts.join(' · ')
 }
 
 // ---------- drawing ----------
@@ -614,7 +565,7 @@ function itemsGroup(c: Ctx, items: readonly Item[], foldKey: string): RenderElem
         [...done, ...dropped].map(it => (
           <Box paddingLeft={2}>
             <Text dimColor wrap="truncate-end">
-              {`${STATUS_ICON[it.status]} ${clip(it.title, 120)}${it.status === 'done' ? (it.doneBy === 'user' ? '（你验收）' : '（Claude 验收）') : ''}`}
+              {`${STATUS_ICON[it.status]} ${clip(it.title, 120)}${it.status === 'done' ? (it.doneBy === 'user' ? '（你验收）' : '（AI 验收）') : ''}`}
             </Text>
           </Box>
         ))}
