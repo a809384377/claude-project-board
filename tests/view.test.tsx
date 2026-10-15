@@ -5,6 +5,8 @@ import { emptyBoard, parseBoard, serializeBoard } from '../hooks/model/parse'
 import type { Board, Goal, Item, Link, Step } from '../hooks/model/types'
 import { entryText } from '../hooks/view/board'
 import { partitionGoals } from '../hooks/view/derive'
+import { EMPTY_LOCAL, localPath } from '../hooks/view/local'
+import { isoLocal } from '../hooks/time'
 import { decideLayout, isPortrait, parseSetting } from '../hooks/view/layout'
 import { hex, paletteFor, titleBg } from '../hooks/view/motion'
 
@@ -256,6 +258,10 @@ async function makeStale($: any): Promise<void> {
   await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as never)
 }
 const submit = ($: any) => $.prompt.submit({ text: 'hi', wait: false, origin: { kind: 'composer' } } as never) as Promise<{ context?: readonly string[] }>
+/** Claude writes the board through its tool, as the main session. */
+const aiWrite = ($: any, ops: object[]) => $.tool.call({ tool: 'mcp__project-board__board_update', ops } as never) as Promise<{ result: string }>
+/** Where this machine's view of the test project is kept. */
+const LOCAL = localPath('/home/me', PROJ)
 
 // ---------- layout decision ----------
 
@@ -332,13 +338,16 @@ for (const surface of SURFACES) {
       expect([user?.props.dimColor, claude?.props.dimColor]).toEqual([true, true])
     })
 
-    test('a running item from another session reads unverified; this session\'s does not', async ($, on) => {
+    test('a running item from another session says so at the end of its row; this session\'s does not', async ($, on) => {
       world(on, fixture())
       mock.clock(on)
       await $.session.start(START)
       const ui = await pane($, surface)
       const lines = await texts(ui, /./)
-      expect(lines.filter(t => t.includes('上次报告在跑'))).toEqual(['上次报告在跑 · 10-10 21:30 · 未核实'])
+      expect(lines.filter(t => t.includes('别的会话'))).toEqual(['别的会话 · 10-10 21:30'])
+      // the whole story is in the details
+      await ui.press({ key: 'item:i-old' })
+      expect(await texts(ui, /^别的会话报告在跑 · 10-10 21:30 · 未核实$/)).toHaveLength(1)
       if (surface === 'terminal') {
         // the terminal draws a spinner canvas: two frames a second and faded for the old report, ten for this session's
         expect(await ui.find({ type: 'Raster', key: 'spin:i-old' })).toBeDefined()
@@ -352,17 +361,54 @@ for (const surface of SURFACES) {
       }
     })
 
-    test('waiting-for text shows under the item; a proposal shows as a card', async ($, on) => {
+    test('waiting-for text ends the item row; a proposal shows as a card that says the conversation works too', async ($, on) => {
       world(on, fixture())
       mock.clock(on)
       await $.session.start(START)
       const ui = await pane($, surface)
-      expect(await texts(ui, /^等：行人一路先提交/)).toHaveLength(1)
+      expect(await texts(ui, /^等：行人一路先提交$/)).toHaveLength(1)
       expect(await texts(ui, /^待你确认$/)).toHaveLength(1)
       expect(await texts(ui, /新建目标：路灯/)).toHaveLength(1)
       expect(await texts(ui, /理由：用户说要加路灯/)).toHaveLength(1)
       expect(await ui.find({ key: 'yes:p-1' })).toBeDefined()
       expect(await ui.find({ key: 'no:p-1' })).toBeDefined()
+      expect(await texts(ui, /^也可以在对话里直接说$/)).toHaveLength(1)
+    })
+
+    test('an item is one line: title, then @owner, a 12-character waiting-for and the other session\'s mark; the rest waits in the details', async ($, on) => {
+      const b = fixture()
+      const q = b.goals[1]!.items.find(i => i.id === 'i-q')!
+      q.waitingFor = '行人一路先提交，再等车流那边的接口定下来'
+      q.owner = 'build-b'
+      q.note = '第一行说明\n第二行'
+      q.dependsOn = ['i-run']
+      world(on, b)
+      mock.clock(on)
+      await $.session.start(START)
+      const ui = await pane($, surface)
+      const row = (await ui.find({ key: 'item:i-q' })) as { text: string }
+      expect(row.text).toBe('⏸ B 路')
+      expect(await texts(ui, /^@build-b$/)).toHaveLength(1)
+      expect(await texts(ui, /^等：行人一路先提交，再等车流…$/)).toHaveLength(1)
+      expect(await texts(ui, /第一行说明|依赖：/)).toHaveLength(0)
+      await ui.press({ key: 'item:i-q' })
+      expect(await texts(ui, /^等：行人一路先提交，再等车流那边的接口定下来$/)).toHaveLength(1)
+      expect(await texts(ui, /^依赖：A 路第二段$/)).toHaveLength(1)
+      expect(await texts(ui, /^第一行说明\n第二行$/)).toHaveLength(1)
+    })
+
+    test('another session\'s running item reported more than 12 hours ago reads 可能已停', async ($, on) => {
+      const clock = mock.clock(on, { now: Date.parse('2026-10-15T12:00:00+08:00') })
+      const b = fixture()
+      const now = await clock.now()
+      b.goals[1]!.items.find(i => i.id === 'i-old')!.reportedAt = isoLocal(now - 13 * 3600_000)
+      b.goals[1]!.items.find(i => i.id === 'i-run')!.session = 'sess-2'
+      b.goals[1]!.items.find(i => i.id === 'i-run')!.reportedAt = isoLocal(now - 11 * 3600_000)
+      world(on, b)
+      await $.session.start(START)
+      const ui = await pane($, surface)
+      expect(await texts(ui, /^可能已停$/)).toHaveLength(1)
+      expect(await texts(ui, /^别的会话 · \d\d-\d\d \d\d:\d\d$/)).toHaveLength(1)
     })
 
     test('title row: the stale mark follows the end-of-turn check', async ($, on) => {
@@ -410,47 +456,6 @@ for (const surface of SURFACES) {
 
 for (const surface of SURFACES) {
   describe(`board buttons (${surface})`, () => {
-    test('验收通过 exists on review items only; pressing it marks done by the user and tells Claude next turn', async ($, on) => {
-      const w = world(on, fixture())
-      const clock = mock.clock(on)
-      await $.session.start(START)
-      const ui = await pane($, surface)
-      expect(await keys(ui, 'approve:')).toEqual(['approve:i-rev'])
-      await ui.press({ key: 'approve:i-rev' })
-      const it = boardOf(w).goals.find(g => g.id === 'g-car')?.items.find(i => i.id === 'i-rev')
-      expect(it).toMatchObject({ status: 'done', doneBy: 'user' })
-      expect(boardOf(w).rev).toBe(1)
-      // the stamp stands where the button was, then the row goes into the folded line
-      expect(await keys(ui, 'approve:')).toEqual([])
-      expect((await texts(ui, /▓▓▓▓|✓ 通过/)).length).toBeGreaterThan(0)
-      expect((await ui.find({ key: 'done:g-car' }))?.text).toContain('已完成 2 项')
-      await clock.advance(700)
-      expect(await texts(ui, /▓▓▓▓|✓ 通过/)).toHaveLength(0)
-      expect((await ui.find({ key: 'done:g-car' }))?.text).toContain('已完成 3 项')
-      // the user's change rides on the next user message
-      const sent = await submit($)
-      expect(sent.context?.join('\n')).toContain('A 路第一段')
-      expect(sent.context?.join('\n')).toContain('用户')
-      expect((await submit($)).context).toBeUndefined()
-    })
-
-    test('验收通过 on an item that is no longer in review does nothing and says so', async ($, on) => {
-      const w = world(on, fixture())
-      mock.clock(on)
-      await $.session.start(START)
-      const ui = await pane($, surface)
-      // someone else moves it to doing before the press lands
-      const parsed = parseBoard(w.files.get(BOARD)?.text ?? '{}')
-      if (!parsed.ok) throw new Error(parsed.error)
-      const raw = parsed.board
-      ;(raw.goals[1]?.items[2] as Item).status = 'doing'
-      raw.rev += 1
-      w.files.set(BOARD, { text: serializeBoard(raw), mtime: 99999 })
-      await ui.press({ key: 'approve:i-rev' })
-      expect(boardOf(w).goals[1]?.items[2]?.status).toBe('doing')
-      expect(w.toasts.join('\n')).toContain('已不在待验收状态')
-    })
-
     test('同意 executes the proposal once even when pressed twice at the same time', async ($, on) => {
       const w = world(on, fixture())
       mock.clock(on)
@@ -495,21 +500,233 @@ for (const surface of SURFACES) {
   })
 }
 
-// ---------- links on review items ----------
+// ---------- 待你看: looked at and hidden on this machine only ----------
+
+/** What the board file holds right now, to compare before and after a press. */
+const fileText = (w: World): string => w.files.get(BOARD)?.text ?? ''
 
 for (const surface of SURFACES) {
-  describe(`acceptance buttons (${surface})`, () => {
-    test('a report gets 打开 / VS Code / 复制路径; a url 打开 / 复制; a command 复制命令', async ($, on) => {
+  describe(`待你看 (${surface})`, () => {
+    test('看过了 takes the item out of 待你看 and the count; its row stays in review, dimmed as ◇ with 已看; neither the board file nor Claude hears of it', async ($, on) => {
+      const w = world(on, fixture())
+      mock.clock(on)
+      await $.session.start(START)
+      const before = fileText(w)
+      const ui = await pane($, surface)
+      expect(await texts(ui, /^待你看$/)).toHaveLength(1)
+      expect(await keys(ui, 'seen:')).toEqual(['seen:i-rev'])
+      if (surface === 'desktop') expect(await ui.find({ type: 'Text', text: /^ ◆ 1 $/ })).toBeDefined()
+      await ui.press({ key: 'seen:i-rev' })
+      expect(await texts(ui, /^待你看$/)).toHaveLength(0)
+      expect(await keys(ui, 'seen:')).toEqual([])
+      if (surface === 'desktop') expect(await ui.find({ type: 'Text', text: /^ ◆ 0 $/ })).toBeDefined()
+      const row = (await ui.find({ key: 'item:i-rev' })) as { text: string; children: Array<{ props: Record<string, unknown> }> }
+      expect(row.text).toBe('◇ A 路第一段')
+      expect(row.children[0]?.props.dimColor).toBe(true)
+      expect(row.children[1]?.props.dimColor).toBe(true)
+      expect(await texts(ui, /^已看$/)).toHaveLength(1)
+      // the board file is untouched; the view state went to this machine's own file
+      expect(fileText(w)).toBe(before)
+      expect(boardOf(w).goals[1]!.items[2]!.status).toBe('review')
+      expect(Object.keys(JSON.parse(w.files.get(LOCAL)?.text ?? '{}').seen)).toEqual(['i-rev'])
+      expect((await submit($)).context).toBeUndefined()
+    })
+
+    test('a new hand-in brings it back: the AI reports it again, or hangs on another entry', async ($, on) => {
+      const w = world(on, fixture())
+      const clock = mock.clock(on)
+      await $.session.start(START)
+      const ui = await pane($, surface)
+      await ui.press({ key: 'seen:i-rev' })
+      expect(await keys(ui, 'seen:')).toEqual([])
+      await aiWrite($, [{ op: 'item.update', id: 'i-rev', status: 'doing' }])
+      await aiWrite($, [{ op: 'item.update', id: 'i-rev', status: 'review' }])
+      await clock.advance(10)
+      expect(await keys(ui, 'seen:')).toEqual(['seen:i-rev'])
+      await ui.press({ key: 'seen:i-rev' })
+      expect(await keys(ui, 'seen:')).toEqual([])
+      await aiWrite($, [{ op: 'item.link.add', id: 'i-rev', link: { type: 'path', kind: '截图', target: 'ai/scratch/shot.png', forReview: true } }])
+      await clock.advance(10)
+      expect(await keys(ui, 'seen:')).toEqual(['seen:i-rev'])
+      void w
+    })
+
+    test('[×] hides a link under the owner it was pressed on only; 已隐藏 N 条 folds it and 恢复 brings it back; nothing reaches the board or Claude', async ($, on) => {
+      const b = fixture()
+      // the same file hangs on the goal and on its review item
+      b.goals[1]!.links = [link({ kind: '设计', target: 'ai/scratch/cars/施工报告.md' })]
+      const w = world(on, b)
+      mock.clock(on)
+      await $.session.start(START)
+      const before = fileText(w)
+      const ui = await pane($, surface)
+      await ui.press({ key: 'links:g-car' })
+      expect(await keys(ui, 'link:g-car:0:')).toContain('link:g-car:0:hide')
+      await ui.press({ key: 'link:g-car:0:hide' })
+      expect(await keys(ui, 'link:g-car:')).toEqual([])
+      expect(await texts(ui, /资料 \d 条/)).toHaveLength(0)
+      expect((await ui.find({ key: 'hidden:g-car' }))?.text).toBe('▸ 已隐藏 1 条')
+      // the item's entry for the same file is still there
+      expect(await keys(ui, 'todo-link:i-rev:0:')).toContain('todo-link:i-rev:0:open')
+      await ui.press({ key: 'hidden:g-car' })
+      expect((await ui.find({ key: 'hidden:g-car' }))?.text).toBe('▾ 已隐藏 1 条')
+      expect(await texts(ui, /^设计 施工报告\.md$/)).toHaveLength(1)
+      await ui.press({ key: 'restore:g-car:0' })
+      expect(await ui.find({ key: 'hidden:g-car' })).toBeUndefined()
+      expect(await keys(ui, 'link:g-car:0:')).toContain('link:g-car:0:open')
+      expect(JSON.parse(w.files.get(LOCAL)?.text ?? '{}').hidden).toEqual({})
+      expect(fileText(w)).toBe(before)
+      expect((await submit($)).context).toBeUndefined()
+    })
+
+    test('hiding every entry of a review item counts as looked at; an entry the AI adds brings it back', async ($, on) => {
+      world(on, fixture())
+      const clock = mock.clock(on)
+      await $.session.start(START)
+      const ui = await pane($, surface)
+      await ui.press({ key: 'todo-link:i-rev:0:hide' })
+      expect(await keys(ui, 'seen:')).toEqual(['seen:i-rev'])
+      expect(await keys(ui, 'todo-link:i-rev:0:')).toEqual([])
+      await ui.press({ key: 'todo-link:i-rev:1:hide' })
+      expect(await keys(ui, 'seen:')).toEqual([])
+      expect(await texts(ui, /^已看$/)).toHaveLength(1)
+      // opened, the item folds what was hidden under it
+      await ui.press({ key: 'item:i-rev' })
+      expect((await ui.find({ key: 'hidden:i-rev' }))?.text).toBe('▸ 已隐藏 2 条')
+      expect(await keys(ui, 'link:i-rev:')).toEqual([`link:i-rev:2:copy`, `link:i-rev:2:hide`])
+      await aiWrite($, [{ op: 'item.link.add', id: 'i-rev', link: { type: 'path', kind: '截图', target: 'ai/scratch/shot.png', forReview: true } }])
+      await clock.advance(10)
+      expect(await keys(ui, 'seen:')).toEqual(['seen:i-rev'])
+      expect(await keys(ui, 'todo-link:i-rev:')).toContain('todo-link:i-rev:3:open')
+    })
+
+    test('a review item without any entry is listed with when it came in, and can be looked at', async ($, on) => {
+      const clock = mock.clock(on, { now: Date.parse('2026-10-11T11:30:00+08:00') })
+      const b = fixture()
+      const rev = b.goals[1]!.items.find(i => i.id === 'i-rev')!
+      rev.links = []
+      rev.reportedAt = NOW
+      world(on, b)
+      await $.session.start(START)
+      const ui = await pane($, surface)
+      expect(await keys(ui, 'seen:')).toEqual(['seen:i-rev'])
+      expect(await texts(ui, /^2 小时前$/)).toHaveLength(1)
+      await ui.press({ key: 'seen:i-rev' })
+      expect(await keys(ui, 'seen:')).toEqual([])
+      void clock
+    })
+
+    test('the buttons of a link: its name opens it; without hover [复制] [×] stay on screen and VS Code is left out', async ($, on) => {
       world(on, fixture())
       mock.clock(on)
       await $.session.start(START)
       const ui = await pane($, surface)
+      const drawn = JSON.stringify(await ui.drawn())
+      if (surface === 'terminal') {
+        expect(await keys(ui, 'todo-link:i-rev:')).toEqual([
+          'todo-link:i-rev:0:open', 'todo-link:i-rev:0:vscode', 'todo-link:i-rev:0:copy', 'todo-link:i-rev:0:hide',
+          'todo-link:i-rev:1:open', 'todo-link:i-rev:1:copy', 'todo-link:i-rev:1:hide',
+        ])
+        // everything but the name waits in a box the pointer reveals
+        expect(drawn).toContain('"key":"lh:todo-link:i-rev:0"')
+        expect((await ui.find({ key: 'todo-link:i-rev:0:copy' }))?.props.label).toBe('复制路径')
+      } else {
+        expect(await keys(ui, 'todo-link:i-rev:')).toEqual([
+          'todo-link:i-rev:0:open', 'todo-link:i-rev:0:copy', 'todo-link:i-rev:0:hide',
+          'todo-link:i-rev:1:open', 'todo-link:i-rev:1:copy', 'todo-link:i-rev:1:hide',
+        ])
+        expect(drawn).not.toContain('"hover"')
+        expect((await ui.find({ key: 'todo-link:i-rev:0:copy' }))?.props.label).toBe('复制')
+      }
+      expect((await ui.find({ key: 'todo-link:i-rev:0:open' }))?.text).toBe('报告 施工报告.md · 第 7 节')
+      expect((await ui.find({ key: 'todo-link:i-rev:0:hide' }))?.props.label).toBe('×')
+    })
+
+    test('a step with no items draws no header, even opened; one with links of its own keeps it', async ($, on) => {
+      const b = steppedBoard()
+      b.goals[0]!.steps.push(step('s-E', 'E 空的步骤'), step('s-F', 'F 只有资料', { links: [link({ kind: '设计', target: 'ai/scratch/cars/施工报告.md' })] }))
+      world(on, b)
+      mock.clock(on)
+      await $.session.start(START)
+      const ui = await pane($, surface)
+      expect(await keys(ui, 'step:')).toContain('step:s-E')
+      await ui.press({ key: 'step:s-E' })
+      await ui.press({ key: 'step:s-F' })
+      expect(await keys(ui, 'sh:')).not.toContain('sh:s-E')
+      expect(await keys(ui, 'sh:')).toContain('sh:s-F')
+      expect(await keys(ui, 'link:s-F:0:')).toContain('link:s-F:0:open')
+    })
+
+    test('a goal\'s links fold into 资料 N 条 unless it is the focus, which lists up to three', async ($, on) => {
+      const b = fixture()
+      b.goals[1]!.links = [link({ kind: '设计', target: 'ai/docs/a.md' })]
+      b.goals[2]!.links = [link({ kind: '设计', target: 'ai/docs/b.md' }), link({ kind: '设计', target: 'ai/docs/c.md' })]
+      world(on, b)
+      mock.clock(on)
+      await $.session.start(START)
+      const ui = await pane($, surface)
+      expect((await ui.find({ key: 'links:g-car' }))?.text).toBe('▸ 资料 1 条')
+      expect(await keys(ui, 'link:g-car:')).toEqual([])
+      expect(await ui.find({ key: 'links:g-ped' })).toBeUndefined()
+      expect(await keys(ui, 'link:g-ped:1:open')).toHaveLength(1)
+    })
+
+    test('the view file under the home directory is read once: what it says is shown from the first drawing', async ($, on) => {
+      const w = world(on, fixture())
+      w.files.set(LOCAL, { text: JSON.stringify({ seen: {}, hidden: { 'i-rev': ['ai/scratch/cars/施工报告.md', 'http://localhost:5173/'] } }), mtime: 1 })
+      mock.clock(on)
+      await $.session.start(START)
+      const ui = await pane($, surface)
+      expect(await keys(ui, 'seen:')).toEqual([])
+      expect(LOCAL).toMatch(/^\/home\/me\/\.cache\/project-board\/view\/[0-9a-f]{16}\.json$/)
+    })
+
+    test('what pi wrote to the view file meanwhile is kept when this side writes', async ($, on) => {
+      const w = world(on, fixture())
+      mock.clock(on)
+      await $.session.start(START)
+      const ui = await pane($, surface)
+      w.files.set(LOCAL, { text: JSON.stringify({ seen: { 'i-other': 'x|y' }, hidden: { 'g-idle': ['a.md'] } }), mtime: 2 })
+      await ui.press({ key: 'seen:i-rev' })
+      const file = JSON.parse(w.files.get(LOCAL)?.text ?? '{}')
+      expect(Object.keys(file.seen).sort()).toEqual(['i-other', 'i-rev'])
+      expect(file.hidden).toEqual({ 'g-idle': ['a.md'] })
+    })
+
+    test('a broken view file leaves the board as it is, says so once, and 看过了 still works for the session', async ($, on) => {
+      const w = world(on, fixture())
+      w.files.set(LOCAL, { text: '{ broken', mtime: 1 })
+      mock.clock(on)
+      await $.session.start(START)
+      const ui = await pane($, surface)
+      expect(await keys(ui, 'goal:')).toEqual(['goal:g-ped', 'goal:g-car', 'goal:g-idle'])
+      expect(w.toasts.filter(t => t.includes('本机视图状态'))).toHaveLength(1)
+      w.writeFails = true
+      await ui.press({ key: 'seen:i-rev' })
+      expect(await keys(ui, 'seen:')).toEqual([])
+      expect(w.toasts.filter(t => t.includes('本机视图状态'))).toHaveLength(1)
+    })
+  })
+}
+
+// ---------- links on review items ----------
+
+for (const surface of SURFACES) {
+  describe(`acceptance buttons (${surface})`, () => {
+    test('an opened item lists its links: a report opens, goes to VS Code (with hover) and copies; a url opens and copies; a command copies', async ($, on) => {
+      world(on, fixture())
+      mock.clock(on)
+      await $.session.start(START)
+      const ui = await pane($, surface)
+      expect(await keys(ui, 'link:i-rev:')).toEqual([])
+      await ui.press({ key: 'item:i-rev' })
       expect(await keys(ui, 'link:i-rev:')).toEqual([
-        'link:i-rev:0:open', 'link:i-rev:0:vscode', 'link:i-rev:0:copy',
-        'link:i-rev:1:open', 'link:i-rev:1:copy',
-        'link:i-rev:2:copy',
+        'link:i-rev:0:open', ...(surface === 'terminal' ? ['link:i-rev:0:vscode'] : []), 'link:i-rev:0:copy', 'link:i-rev:0:hide',
+        'link:i-rev:1:open', 'link:i-rev:1:copy', 'link:i-rev:1:hide',
+        'link:i-rev:2:copy', 'link:i-rev:2:hide',
       ])
       expect((await ui.find({ key: 'link:i-rev:2:copy' }))?.props.label).toBe('复制命令')
+      expect((await ui.find({ key: 'link:i-rev:0:open' }))?.text).toBe('验收 报告 施工报告.md · 第 7 节')
     })
 
     test('the buttons pass absolute paths to open, unchanged, without a shell', async ($, on) => {
@@ -517,12 +734,12 @@ for (const surface of SURFACES) {
       mock.clock(on)
       await $.session.start(START)
       const ui = await pane($, surface)
-      await ui.press({ key: 'link:i-rev:0:open' })
-      await ui.press({ key: 'link:i-rev:0:vscode' })
-      await ui.press({ key: 'link:i-rev:1:open' })
+      await ui.press({ key: 'todo-link:i-rev:0:open' })
+      if (surface === 'terminal') await ui.press({ key: 'todo-link:i-rev:0:vscode' })
+      await ui.press({ key: 'todo-link:i-rev:1:open' })
       expect(w.runs).toEqual([
         ['open', REPORT],
-        ['open', '-a', 'Visual Studio Code', REPORT],
+        ...(surface === 'terminal' ? [['open', '-a', 'Visual Studio Code', REPORT]] : []),
         ['open', 'http://localhost:5173/'],
       ])
     })
@@ -532,6 +749,7 @@ for (const surface of SURFACES) {
       mock.clock(on)
       await $.session.start(START)
       const ui = await pane($, surface)
+      await ui.press({ key: 'item:i-rev' })
       await ui.press({ key: 'link:i-rev:0:copy' })
       await ui.press({ key: 'link:i-rev:2:copy' })
       expect(w.copies).toEqual([
@@ -547,11 +765,11 @@ for (const surface of SURFACES) {
       await $.session.start(START)
       const ui = await pane($, surface)
       w.openFails = true
-      await ui.press({ key: 'link:i-rev:0:open' })
+      await ui.press({ key: 'todo-link:i-rev:0:open' })
       expect(w.copies).toEqual([{ text: REPORT, surface }])
       expect(w.toasts.at(-1)).toContain('已把路径复制到剪贴板')
       w.copyOk = false
-      await ui.press({ key: 'link:i-rev:0:open' })
+      await ui.press({ key: 'todo-link:i-rev:0:open' })
       expect(w.toasts.at(-1)).toContain(`完整内容：${REPORT}`)
     })
 
@@ -560,7 +778,8 @@ for (const surface of SURFACES) {
       mock.clock(on)
       await $.session.start(START)
       const ui = await pane($, surface)
-      // the review entry shows in the "待你处理" block and under its item
+      await ui.press({ key: 'item:i-rev' })
+      // the review entry shows in the "待你看" block and under its item
       expect(await texts(ui, /文件不存在/)).toHaveLength(2)
       expect((await ui.find({ key: 'todo-link:i-rev:0:open' }))?.props.dimColor).toBe(true)
       expect((await ui.find({ key: 'link:i-rev:0:open' }))?.props.dimColor).toBe(true)
@@ -582,8 +801,8 @@ test('a root with spaces and Chinese characters reaches open as one argument', a
   mock.clock(on)
   await $.session.start({ ...START, cwd: root })
   const ui = await pane($, 'terminal')
-  await ui.press({ key: 'link:i-rev:0:open' })
-  await ui.press({ key: 'link:i-rev:0:vscode' })
+  await ui.press({ key: 'todo-link:i-rev:0:open' })
+  await ui.press({ key: 'todo-link:i-rev:0:vscode' })
   expect(w.runs).toEqual([
     ['open', `${root}/ai/scratch/cars/施工报告.md`],
     ['open', '-a', 'Visual Studio Code', `${root}/ai/scratch/cars/施工报告.md`],
@@ -609,7 +828,7 @@ for (const surface of SURFACES) {
       await $.session.start(START)
       const band = await mountBand($, surface, LANDSCAPE)
       const line = await band.find({ type: 'Text', text: /^看板/ })
-      expect(line?.text).toBe('看板 · 在跑 2 · 待验收 1 · 待确认 1 · /board 打开')
+      expect(line?.text).toBe('看板 · 在跑 2 · 待你看 1 · 待确认 1 · /board 打开')
       expect(await band.find({ key: 'goal:g-car' })).toBeUndefined()
     })
 
@@ -641,7 +860,8 @@ for (const surface of SURFACES) {
       // only the focus goal is open in the narrow view
       expect(await band.find({ key: 'item:i-p1' })).toBeDefined()
       expect(await band.find({ key: 'item:i-run' })).toBeUndefined()
-      expect(await band.find({ key: 'approve:i-rev' })).toBeUndefined()
+      expect(await band.find({ key: 'item:i-rev' })).toBeUndefined()
+      expect(await band.find({ key: 'seen:i-rev' })).toBeDefined()
     })
 
     test('a button works from the band too', async ($, on) => {
@@ -821,9 +1041,9 @@ describe('docked pane: the viewport is the conversation, the screen shape is the
 
 const pane2 = ($: any, surface: (typeof SURFACES)[number], viewport: object, props: object): Promise<Ui> => mountPane($, surface, viewport as typeof LANDSCAPE, props)()
 
-// ---------- links under a goal, the "待你处理" block, ~ paths ----------
+// ---------- links under a goal, the "待你看" block, ~ paths ----------
 
-describe('goal links, the to-do block and ~ paths', () => {
+describe('goal links, the 待你看 block and ~ paths', () => {
   const DESIGN = '/home/me/Desktop/设计/方案 一.md'
   const gl = (n: number): Link[] => Array.from({ length: n }, (_, i) => link({ kind: '设计方案', target: `ai/docs/方案${i}.md` }))
 
@@ -834,6 +1054,7 @@ describe('goal links, the to-do block and ~ paths', () => {
     mock.clock(on)
     await $.session.start(START)
     const ui = await pane($, 'terminal')
+    await ui.press({ key: 'item:i-rev' })
     expect(await texts(ui, /文件不存在/)).toHaveLength(0)
     await ui.press({ key: 'link:i-rev:0:open' })
     expect(w.runs).toEqual([['open', DESIGN]])
@@ -850,37 +1071,38 @@ describe('goal links, the to-do block and ~ paths', () => {
     mock.clock(on)
     await $.session.start(START)
     const ui = await pane($, 'terminal')
+    await ui.press({ key: 'item:i-rev' })
     expect(await texts(ui, /文件不存在/)).toHaveLength(2)
     await ui.press({ key: 'link:i-rev:0:open' })
     expect(w.toasts.at(-1)).toBe(`文件不存在：${DESIGN}`)
   })
 
-  test('a goal with up to 3 links lists them under its title, with the same buttons as an item', async ($, on) => {
+  test('the focus goal lists up to 3 links under its title, with the same buttons as an item', async ($, on) => {
     const b = fixture()
-    b.goals[1]!.links = gl(1)
+    b.goals[2]!.links = gl(1)
     const w = world(on, b, { existing: [`${PROJ}/ai/docs/方案0.md`] })
     mock.clock(on)
     await $.session.start(START)
     const ui = await pane($, 'terminal')
     expect(await texts(ui, /^资料$/)).toHaveLength(1)
-    expect(await keys(ui, 'link:g-car:0:')).toEqual(['link:g-car:0:open', 'link:g-car:0:vscode', 'link:g-car:0:copy'])
-    await ui.press({ key: 'link:g-car:0:open' })
+    expect(await keys(ui, 'link:g-ped:0:')).toEqual(['link:g-ped:0:open', 'link:g-ped:0:vscode', 'link:g-ped:0:copy', 'link:g-ped:0:hide'])
+    await ui.press({ key: 'link:g-ped:0:open' })
     expect(w.runs).toEqual([['open', `${PROJ}/ai/docs/方案0.md`]])
   })
 
-  test('more than 3 links fold into one line; a press lists them', async ($, on) => {
+  test('more than 3 links fold into one line even on the focus goal; a press lists them', async ($, on) => {
     const b = fixture()
-    b.goals[1]!.links = gl(4)
+    b.goals[2]!.links = gl(4)
     world(on, b, { existing: [] })
     mock.clock(on)
     await $.session.start(START)
     const ui = await pane($, 'terminal')
     expect(await texts(ui, /资料 4 条/)).toHaveLength(1)
-    expect(await keys(ui, 'link:g-car:')).toEqual([])
-    await ui.press({ key: 'links:g-car' })
-    expect(await keys(ui, 'link:g-car:')).toHaveLength(4 * 3)
-    // 4 goal links, plus the review report in the to-do block and under its item
-    expect(await texts(ui, /文件不存在/)).toHaveLength(4 + 2)
+    expect(await keys(ui, 'link:g-ped:')).toEqual([])
+    await ui.press({ key: 'links:g-ped' })
+    expect(await keys(ui, 'link:g-ped:')).toHaveLength(4 * 4)
+    // 4 goal links, plus the review report in the 待你看 block
+    expect(await texts(ui, /文件不存在/)).toHaveLength(4 + 1)
   })
 
   test('a collapsed goal shows no links; a goal without links shows no 资料 line', async ($, on) => {
@@ -894,25 +1116,26 @@ describe('goal links, the to-do block and ~ paths', () => {
     expect(await texts(ui, /^资料$/)).toHaveLength(0)
   })
 
-  test('待你处理 lists every review item with its approve button and its review entries, in the pane and in the narrow view', async ($, on) => {
+  test('待你看 lists every review item with 看过了 and its review entries, in the pane and in the narrow view; no button writes the board', async ($, on) => {
     const w = world(on, fixture())
     mock.clock(on)
     await $.session.start(START)
     for (const show of [() => pane($, 'terminal'), () => ((w.panes = placedPane(false)), mountBand($, 'terminal', PORTRAIT))]) {
       const ui = await show()
-      expect(await texts(ui, /^待你处理$/)).toHaveLength(1)
-      expect(await keys(ui, 'todo-approve:')).toEqual(['todo-approve:i-rev'])
+      expect(await texts(ui, /^待你看$/)).toHaveLength(1)
+      expect(await keys(ui, 'seen:')).toEqual(['seen:i-rev'])
+      expect(await keys(ui, 'approve')).toEqual([])
+      expect(await keys(ui, 'todo-approve')).toEqual([])
       // only the entries marked for review, not the command
-      expect(await keys(ui, 'todo-link:i-rev:')).toEqual(['todo-link:i-rev:0:open', 'todo-link:i-rev:0:vscode', 'todo-link:i-rev:0:copy', 'todo-link:i-rev:1:open', 'todo-link:i-rev:1:copy'])
+      expect(await keys(ui, 'todo-link:i-rev:')).toEqual([
+        'todo-link:i-rev:0:open', 'todo-link:i-rev:0:vscode', 'todo-link:i-rev:0:copy', 'todo-link:i-rev:0:hide',
+        'todo-link:i-rev:1:open', 'todo-link:i-rev:1:copy', 'todo-link:i-rev:1:hide',
+      ])
       await ui.unmount()
     }
-    const ui = await pane($, 'terminal')
-    await ui.press({ key: 'todo-approve:i-rev' })
-    expect(boardOf(w).goals.flatMap(g => g.items).find(i => i.id === 'i-rev')?.status).toBe('done')
-    expect(boardOf(w).goals.flatMap(g => g.items).find(i => i.id === 'i-rev')?.doneBy).toBe('user')
   })
 
-  test('待你处理 sits above the cards and the goals', async ($, on) => {
+  test('待你看 sits above the cards and the goals', async ($, on) => {
     const b = fixture()
     world(on, b)
     mock.clock(on)
@@ -920,18 +1143,18 @@ describe('goal links, the to-do block and ~ paths', () => {
     const ui = await pane($, 'terminal')
     const ks = ((await ui.findAll({ type: 'Button' })) as Array<{ key: string }>).map(x => x.key)
     const at = (k: string): number => ks.indexOf(k)
-    expect(at('todo-approve:i-rev')).toBeLessThan(at('yes:p-1'))
+    expect(at('seen:i-rev')).toBeLessThan(at('yes:p-1'))
     expect(at('yes:p-1')).toBeLessThan(at('goal:g-ped'))
   })
 
-  test('without a review item there is no 待你处理 block', async ($, on) => {
+  test('without a review item there is no 待你看 block', async ($, on) => {
     const c = fixture()
     c.goals[1]!.items.find(i => i.id === 'i-rev')!.status = 'done'
     world(on, c)
     mock.clock(on)
     await $.session.start(START)
     const ui2 = await pane($, 'terminal')
-    expect(await texts(ui2, /^待你处理$/)).toHaveLength(0)
+    expect(await texts(ui2, /^待你看$/)).toHaveLength(0)
   })
 
   test('a review item with no review entry shows why', async ($, on) => {
@@ -1107,9 +1330,12 @@ describe('view helpers', () => {
     expect(p.active.map(g => g.id)).toEqual(['g-ped', 'g-car', 'g-idle'])
     expect(p.paused.map(g => g.id)).toEqual(['g-pause'])
   })
-  test('entryText counts running, review and proposals; zero parts are left out', () => {
-    const vm = { board: fixture(), stale: false } as never
-    expect(entryText(vm)).toBe('看板 · 在跑 2 · 待验收 1 · 待确认 1 · /board 打开')
+  test('entryText counts running, review items not yet looked at, and proposals; zero parts are left out', () => {
+    const b = fixture()
+    expect(entryText({ board: b, stale: false, local: EMPTY_LOCAL })).toBe('看板 · 在跑 2 · 待你看 1 · 待确认 1 · /board 打开')
+    const rev = b.goals[1]!.items[2]!
+    const hidden = { seen: {}, hidden: { 'i-rev': rev.links.filter(l => l.forReview).map(l => l.target) } }
+    expect(entryText({ board: b, stale: false, local: hidden })).toBe('看板 · 在跑 2 · 待确认 1 · /board 打开')
   })
   test('dependencies show only what is still unfinished, two names and a count', async ($, on) => {
     const b = fixture()
@@ -1119,6 +1345,8 @@ describe('view helpers', () => {
     mock.clock(on)
     await $.session.start(START)
     const ui = await pane($, 'terminal')
+    await ui.press({ key: 'item:i-dep' })
+    await ui.press({ key: 'item:i-dep2' })
     expect(await texts(ui, /^依赖：A 路第二段 \/ C 路车流 等 3 项$/)).toHaveLength(1)
     expect(await texts(ui, /^依赖：A 路第二段$/)).toHaveLength(1)
   })
@@ -1271,7 +1499,7 @@ for (const surface of SURFACES) {
       expect((await ui.find({ key: 'done:g-can' }))?.text).toBe('▸ ✓ 已完成 1 项')
     })
 
-    test('待你处理 names the goal and the step: 目标短名 › 步骤短名; an item outside any step names the goal only', async ($, on) => {
+    test('待你看 names the goal and the step: 目标短名 › 步骤短名; an item outside any step names the goal only', async ($, on) => {
       const b = steppedBoard()
       b.goals[1]!.items.push(item('i-f', { title: '收尾', status: 'review' }))
       world(on, b)
@@ -1289,7 +1517,7 @@ for (const surface of SURFACES) {
       mock.clock(on)
       await $.session.start(START)
       const ui = await pane($, surface)
-      expect(await keys(ui, 'link:s-B:')).toEqual(['link:s-B:0:open', 'link:s-B:0:vscode', 'link:s-B:0:copy'])
+      expect(await keys(ui, 'link:s-B:')).toEqual(['link:s-B:0:open', ...(surface === 'terminal' ? ['link:s-B:0:vscode'] : []), 'link:s-B:0:copy', 'link:s-B:0:hide'])
     })
   })
 }
@@ -1484,59 +1712,6 @@ describe('theme lookup for the canvas colours', () => {
   })
 })
 
-describe('pressing 验收通过 answers at once', () => {
-  test('the stamp stands in for the button before the file is written; the row leaves the live list afterwards', async ($, on) => {
-    const w = world(on, fixture())
-    const clock = mock.clock(on)
-    await $.session.start(START)
-    const ui = await pane($, 'terminal')
-    let release = (): void => undefined
-    w.gate = new Promise<void>(r => (release = r))
-    const pressed = ui.press({ key: 'approve:i-rev' })
-    await clock.settle()
-    // the write is still held
-    expect(boardOf(w).goals[1]!.items[2]!.status).toBe('review')
-    expect(await ui.find({ key: 'approve:i-rev' })).toBeUndefined()
-    expect(await ui.find({ key: 'todo-approve:i-rev' })).toBeUndefined()
-    expect((await texts(ui, /▓▓▓▓/)).length).toBe(2)
-    w.gate = null
-    release()
-    await pressed
-    expect(boardOf(w).goals[1]!.items[2]!.status).toBe('done')
-    // written, but the row stays where it was while the stamp finishes
-    expect(await ui.find({ key: 'item:i-rev' })).toBeDefined()
-    expect((await texts(ui, /▓▓▓▓|✓ 通过/)).length).toBeGreaterThan(0)
-    await clock.advance(700)
-    expect(await texts(ui, /▓▓▓▓|✓ 通过/)).toHaveLength(0)
-    expect(await ui.find({ key: 'item:i-rev' })).toBeUndefined()
-  })
-
-  test('a refused write puts the button back and says why', async ($, on) => {
-    const w = world(on, fixture())
-    const clock = mock.clock(on)
-    await $.session.start(START)
-    const ui = await pane($, 'terminal')
-    w.writeFails = true
-    await ui.press({ key: 'approve:i-rev' })
-    await clock.advance(10)
-    expect(w.toasts.join('\n')).toContain('没有执行')
-    expect(await ui.find({ key: 'approve:i-rev' })).toBeDefined()
-    expect(await texts(ui, /▓▓▓▓|✓ 通过/)).toHaveLength(0)
-    expect(boardOf(w).goals[1]!.items[2]!.status).toBe('review')
-  })
-
-  test('pressing the todo-block button works the same way, and a second press while stamped does nothing', async ($, on) => {
-    const w = world(on, fixture())
-    const clock = mock.clock(on)
-    await $.session.start(START)
-    const ui = await pane($, 'terminal')
-    await Promise.allSettled([ui.press({ key: 'todo-approve:i-rev' }), ui.press({ key: 'todo-approve:i-rev' })])
-    await clock.advance(700)
-    expect(boardOf(w).rev).toBe(1)
-    expect(boardOf(w).goals[1]!.items[2]).toMatchObject({ status: 'done', doneBy: 'user' })
-  })
-})
-
 // ---------- motion through the engine ----------
 
 /** A board where nothing runs, waits or is behind: nothing is allowed to move. */
@@ -1699,24 +1874,6 @@ describe('one-off effects through the engine', () => {
     expect(await rowColours(ui)).toBe(base)
   })
 
-  test('the stamp goes ▓▓▓▓ then a light ✓ 通过 then a green one, and the row leaves after 0.7 s', async ($, on) => {
-    const w = world(on, fixture(), { theme: 'dark' })
-    const clock = mock.clock(on)
-    await $.session.start(START)
-    const ui = await pane($, 'terminal')
-    await ui.press({ key: 'approve:i-rev' })
-    expect((await texts(ui, /▓▓▓▓/)).length).toBeGreaterThan(0)
-    await clock.advance(200)
-    const light = await ui.find({ type: 'Text', text: /✓ 通过/ })
-    expect(light?.props.backgroundColor).toMatch(/^#[0-9a-f]{6}$/)
-    await clock.advance(200)
-    const green = await ui.find({ type: 'Text', text: /✓ 通过/ })
-    expect(green?.props.backgroundColor).toBe('#4eba65')
-    await clock.advance(400)
-    expect(await texts(ui, /✓ 通过/)).toHaveLength(0)
-    expect(boardOf(w).goals[1]!.items[2]!.status).toBe('done')
-  })
-
   test('finishing the last open item of a step throws confetti over its goal for 1.5 s, and the mascot cheers for 2.6 s', async ($, on) => {
     const b = boardWith(
       goal('g-x', 'X 目标', [item('x1', { stepId: 's-1', status: 'done', doneBy: 'user' }), item('x2', { stepId: 's-1', status: 'review' }), item('x3', { stepId: 's-2' })]),
@@ -1728,7 +1885,7 @@ describe('one-off effects through the engine', () => {
     const ui = await pane($, 'terminal')
     expect(await ui.find({ type: 'Raster', key: 'confetti:g-x' })).toBeUndefined()
     const mascot0 = (await ui.find({ type: 'Raster', key: 'mascot' })) as { props: { cells: string } }
-    await ui.press({ key: 'approve:x2' })
+    await aiWrite($, [{ op: 'item.update', id: 'x2', status: 'done' }])
     await clock.advance(50)
     expect(await ui.find({ type: 'Raster', key: 'confetti:g-x' })).toBeDefined()
     expect(((await ui.find({ type: 'Raster', key: 'mascot' })) as { props: { cells: string } }).props.cells).not.toBe(mascot0.props.cells)
@@ -1737,7 +1894,7 @@ describe('one-off effects through the engine', () => {
     void w
   })
 
-  test('with motion off none of it is drawn: no ripple colours, no confetti, the final stamp at once', { options: { motion: 'off' } }, async ($, on) => {
+  test('with motion off none of it is drawn: no ripple colours, no confetti', { options: { motion: 'off' } }, async ($, on) => {
     const w = world(on, fixture(), { theme: 'dark' })
     const clock = mock.clock(on)
     await $.session.start(START)
@@ -1749,12 +1906,27 @@ describe('one-off effects through the engine', () => {
     w.files.set(BOARD, { text: serializeBoard(raw), mtime: 88888 })
     await clock.advance(3050)
     expect(await rowColours(ui)).toBe(base)
-    await ui.press({ key: 'approve:i-rev' })
-    expect((await texts(ui, /✓ 通过/)).length).toBeGreaterThan(0)
-    expect(await texts(ui, /▓▓▓▓/)).toHaveLength(0)
+    await aiWrite($, [{ op: 'item.update', id: 'i-rev', status: 'done' }])
+    await clock.advance(50)
+    expect(await ui.find({ type: 'Raster', key: 'confetti:g-car' })).toBeUndefined()
+    expect(await rowColours(ui)).toBe(base)
   })
 })
 
+
+describe('the mascot waits only for what the user has not looked at', () => {
+  test('看过了 on the last waiting item turns the waiting pose back into the running one', async ($, on) => {
+    world(on, steppedBoard(), { theme: 'dark' })
+    mock.clock(on)
+    await $.session.start(START)
+    const ui = await pane($, 'terminal')
+    const cells = async (): Promise<string> => ((await ui.find({ type: 'Raster', key: 'mascot' })) as { props: { cells: string } }).props.cells
+    const waiting = await cells()
+    await ui.press({ key: 'seen:i-b1' })
+    const after = await cells()
+    expect(after).not.toBe(waiting)
+  })
+})
 
 describe('the calm pace through the engine', () => {
   test('a session nobody touched drops to two frames a second three minutes after it started', async ($, on) => {
@@ -1802,7 +1974,7 @@ describe('the confetti of a finished goal', () => {
     await clock.advance(1000)
     const ui = await pane($, 'terminal')
     expect(await ui.find({ key: 'goal:g-last' })).toBeDefined()
-    await ui.press({ key: 'approve:L2' })
+    await aiWrite($, [{ op: 'item.update', id: 'L2', status: 'done' }])
     for (const at of [50, 350, 750]) {
       await clock.advance(at === 50 ? 50 : 300 + (at === 750 ? 100 : 0))
       expect(await ui.find({ type: 'Raster', key: 'confetti:g-last' })).toBeDefined()
@@ -1821,7 +1993,7 @@ describe('the confetti of a finished goal', () => {
     await $.session.start(START)
     await clock.advance(1000)
     const ui = await pane($, 'terminal')
-    await ui.press({ key: 'approve:L2' })
+    await aiWrite($, [{ op: 'item.update', id: 'L2', status: 'done' }])
     await clock.advance(50)
     expect(await ui.find({ key: 'goal:g-last' })).toBeUndefined()
     expect(await ui.find({ key: 'fold:done' })).toBeDefined()
@@ -2006,7 +2178,7 @@ describe('status colours: green when something is happening for you, grey otherw
     for (const p of all) expect(p.color).toBe(GREEN_LIGHT)
     const run = await propsOf(ui, /^●$/)
     expect(run.map(p => [p.color, p.dimColor === true])).toEqual(expect.arrayContaining([[GREEN_LIGHT, false], [GREEN_LIGHT, true]]))
-    expect((await propsOf(ui, /^待你处理$/))[0]!.color).toBe(GREEN_LIGHT)
+    expect((await propsOf(ui, /^待你看$/))[0]!.color).toBe(GREEN_LIGHT)
     expect((await propsOf(ui, /^待你确认$/))[0]!.color).toBe(GREEN_LIGHT)
     for (const p of await propsOf(ui, /^[○⏸◐]$/)) expect(p.dimColor).toBe(true)
   })

@@ -16,9 +16,9 @@ export interface TickerDeps {
 export interface TickerView {
   /** Something runs on and on: a running item, something waiting for the user, a board that may be behind. */
   continuous(): boolean
-  /** A one-off effect or a stamp is still under way at `now`. */
+  /** A one-off effect is still under way at `now`. */
   oneShot(now: number): boolean
-  /** Changes whenever text drawn with Box colours has to move on (ripples, stamps); a change redraws the board. */
+  /** Changes whenever text drawn with Box colours has to move on (ripples); a change redraws the board. */
   signature(now: number): string
   /** When the session started or the user or the board last did something. */
   lastActive(): number
@@ -34,7 +34,7 @@ type Site = { specs: RasterSpec[]; last: Map<string, string> }
 /**
  * One timer for every moving thing on the board. It runs only while the board is on screen, motion is on
  * and something is moving, repaints the canvases that changed with blit, and redraws the board when text-borne
- * effects (ripple, stamp) move on. A refused blit means the canvas is gone: that site is forgotten until it draws again.
+ * effects (ripples) move on. A refused blit means the canvas is gone: that site is forgotten until it draws again.
  */
 export class Ticker {
   private sites = new Map<string, Site>()

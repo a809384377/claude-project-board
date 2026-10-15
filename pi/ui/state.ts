@@ -6,9 +6,10 @@ import { isoLocal } from '../../hooks/time'
 import { boardCounts } from '../../hooks/view/derive'
 import { deriveEffects, isAlive, NO_FX, textSignature, type Change, type Effects } from '../../hooks/view/effects'
 import { detectEnv, resolveTarget, type Platform } from '../../hooks/view/links'
+import { EMPTY_LOCAL, hideLink, LocalStore, localPath, markSeen, unhideLink, type LocalView } from '../../hooks/view/local'
 import { paletteFor, type Palette, type RasterSpec } from '../../hooks/view/motion'
 import { CALM_AFTER_MS, Ticker } from '../../hooks/view/ticker'
-import { makeActions, renderBoard, renderEntry, shownLinks, STAMP_MS, type Actions, type Els, type StoreActions, type ViewModel } from '../gen/board.js'
+import { makeActions, renderBoard, renderEntry, shownLinks, type Actions, type Els, type StoreActions, type ViewModel } from '../gen/board.js'
 import { draw, els, type Drawn, type Hit, type Node } from './engine'
 
 type Mode = 'pane' | 'band-full'
@@ -19,11 +20,14 @@ export type UiEnv = {
   requestRender: () => void
   motion: boolean
   mascot: boolean
+  /** The home directory the local view file lives under; the user's own when absent. */
+  home?: string
 }
 
 /**
  * What the board view needs between frames, the way the Claude Code plugin keeps it in register.ts: the user's
- * open/closed choices, stamps, one-off effects, the checks for linked files, and the timer that moves the canvases.
+ * open/closed choices, what was looked at or hidden on this machine, one-off effects, the checks for linked files,
+ * and the timer that moves the canvases.
  * `draw` is synchronous (pi asks for lines); whatever is still being checked arrives with a later render.
  */
 export class BoardUi {
@@ -32,13 +36,16 @@ export class BoardUi {
   accent = 0xb48ee0
   stale = false
   private expanded: Record<string, boolean> = {}
-  private stamps: Readonly<Record<string, number>> = {}
+  /** Shared with Claude Code through one file per project under the home directory. */
+  private readonly local: LocalStore
+  /** Local view files whose first read has been asked for. */
+  private readonly localAsked = new Set<string>()
   private fx = new Map<string, Effects>()
   private root = ''
   private lastActive = Date.now()
   private continuous = false
   private ambient: { platform: Platform; hasCode: boolean; home: string; sessionId: string } | null = null
-  private missingCache: { board: unknown; key: string; missing: Record<Mode, ReadonlySet<string>> } | null = null
+  private missingCache: { board: unknown; key: string; local: LocalView; missing: Record<Mode, ReadonlySet<string>> } | null = null
   private warming = false
   private readonly ticker: Ticker
   private readonly storeActions: StoreActions
@@ -47,6 +54,7 @@ export class BoardUi {
 
   constructor(private readonly env: UiEnv) {
     this.storeActions = makeActions(env.host, env.store, async () => isoLocal(await env.host.now()))
+    this.local = new LocalStore(env.host)
     this.actions = this.makeActions()
     this.ticker = new Ticker(
       {
@@ -64,8 +72,8 @@ export class BoardUi {
       },
       {
         continuous: () => this.continuous,
-        oneShot: now => isAlive(this.fx.get(this.root) ?? NO_FX, now) || Object.values(this.stamps).some(at => now - at < STAMP_MS),
-        signature: now => textSignature(this.fx.get(this.root) ?? NO_FX, this.stamps, now),
+        oneShot: now => isAlive(this.fx.get(this.root) ?? NO_FX, now),
+        signature: now => textSignature(this.fx.get(this.root) ?? NO_FX, now),
         lastActive: () => this.lastActive,
       },
     )
@@ -75,6 +83,10 @@ export class BoardUi {
   /** The colours the board is drawn in: the theme's, with the brand colour (frame, title area, figure) replaced by pi's accent. */
   palette(): Palette {
     return { ...(paletteFor(this.appearance) as Palette), claude: this.accent }
+  }
+
+  private home(): string {
+    return this.env.home ?? homedir()
   }
 
   private render(): void {
@@ -98,7 +110,33 @@ export class BoardUi {
     void this.ticker.ensure()
   }
 
+  /** The local view file of the project on screen; null before there is a board. */
+  private localPath(): string | null {
+    const root = this.env.store.current().root
+    return root === null ? null : localPath(this.home(), root)
+  }
+
+  /** The local view of the project on screen; its first read is started here and draws again when it lands. */
+  private localView(): LocalView {
+    const path = this.localPath()
+    if (path === null) return EMPTY_LOCAL
+    if (!this.localAsked.has(path)) {
+      this.localAsked.add(path)
+      void this.local.load(path).then(() => this.render())
+    }
+    return this.local.get(path)
+  }
+
   // ---------- what the buttons do ----------
+
+  /** Changes the local view file and draws again; the board file and the model never hear of it. */
+  private async changeLocal(fn: (lv: LocalView) => LocalView): Promise<void> {
+    this.touch()
+    const path = this.localPath()
+    if (path === null) return
+    await this.local.update(path, fn)
+    this.render()
+  }
 
   private makeActions(): Actions {
     const base = this.storeActions
@@ -117,25 +155,13 @@ export class BoardUi {
       approveProposal: id => (this.touch(), base.approveProposal(id)),
       rejectProposal: id => (this.touch(), base.rejectProposal(id)),
       focusGoal: id => (this.touch(), base.focusGoal(id)),
-      // The stamp goes up before the file is written and stays long enough to be seen.
-      approveItem: async id => {
-        if (this.stamps[id] !== undefined) return false
-        const start = Date.now()
-        this.lastActive = start
-        this.stamps = { ...this.stamps, [id]: start }
-        this.render()
-        void this.ticker.ensure()
-        const ok = await base.approveItem(id)
-        const left = ok ? STAMP_MS - (Date.now() - start) : 0
-        const drop = (): void => {
-          const { [id]: _gone, ...rest } = this.stamps
-          this.stamps = rest
-          this.render()
-        }
-        if (left > 0) setTimeout(drop, left).unref?.()
-        else drop()
-        return ok
-      },
+      markSeen: id =>
+        this.changeLocal(lv => {
+          const it = this.env.store.current().board?.goals.flatMap(g => g.items).find(i => i.id === id)
+          return it === undefined ? lv : markSeen(lv, it)
+        }),
+      hideLink: (ownerId, target) => this.changeLocal(lv => hideLink(lv, ownerId, target)),
+      unhideLink: (ownerId, target) => this.changeLocal(lv => unhideLink(lv, ownerId, target)),
     }
   }
 
@@ -143,7 +169,8 @@ export class BoardUi {
 
   private fresh(): boolean {
     const cur = this.env.store.current()
-    return this.ambient !== null && this.missingCache !== null && this.missingCache.board === cur.board && this.missingCache.key === JSON.stringify(this.expanded)
+    const m = this.missingCache
+    return this.ambient !== null && m !== null && m.board === cur.board && m.key === JSON.stringify(this.expanded) && m.local === this.localView()
   }
 
   /** Asks the machine what the drawing reuses: platform, session, and which linked files are missing. Draws again when done. */
@@ -155,17 +182,18 @@ export class BoardUi {
       try {
         if (this.ambient === null) {
           const e = await detectEnv(host).catch(() => ({ platform: process.platform === 'darwin' ? ('darwin' as const) : ('linux' as const), hasCode: false }))
-          this.ambient = { ...e, home: homedir(), sessionId: await host.sessionId() }
+          this.ambient = { ...e, home: this.home(), sessionId: await host.sessionId() }
         }
         const cur = store.current()
         const expanded = this.expanded
         const key = JSON.stringify(expanded)
+        const local = this.localView()
         const root = cur.root ?? ''
         const known = new Map<string, boolean>()
         const missingIn = async (mode: Mode): Promise<ReadonlySet<string>> => {
           const missing = new Set<string>()
           if (cur.board === null) return missing
-          for (const l of shownLinks(cur.board, expanded, mode)) {
+          for (const l of shownLinks(cur.board, expanded, mode, local)) {
             if (l.type !== 'path') continue
             const abs = resolveTarget(l.target, root, this.ambient?.home ?? '')
             let there = known.get(abs)
@@ -177,7 +205,7 @@ export class BoardUi {
           }
           return missing
         }
-        this.missingCache = { board: cur.board, key, missing: { pane: await missingIn('pane'), 'band-full': await missingIn('band-full') } }
+        this.missingCache = { board: cur.board, key, local, missing: { pane: await missingIn('pane'), 'band-full': await missingIn('band-full') } }
       } catch {
         // keep what there was; a later draw asks again
       } finally {
@@ -192,11 +220,12 @@ export class BoardUi {
   private vm(width: number, mode: Mode, specs: RasterSpec[]): ViewModel {
     if (!this.fresh()) this.warm()
     const cur = this.env.store.current()
-    const amb = this.ambient ?? { platform: (process.platform === 'darwin' ? 'darwin' : 'linux') as Platform, hasCode: false, home: homedir(), sessionId: '' }
+    const amb = this.ambient ?? { platform: (process.platform === 'darwin' ? 'darwin' : 'linux') as Platform, hasCode: false, home: this.home(), sessionId: '' }
     const root = cur.root ?? ''
     this.root = root
     const now = Date.now()
-    const counts = cur.board === null ? null : boardCounts(cur.board)
+    const local = this.localView()
+    const counts = cur.board === null ? null : boardCounts(cur.board, local)
     this.continuous = counts !== null && (counts.running > 0 || counts.review > 0 || (cur.board?.proposals.length ?? 0) > 0 || this.stale)
     return {
       board: cur.board,
@@ -219,7 +248,8 @@ export class BoardUi {
       now,
       calm: now - this.lastActive >= CALM_AFTER_MS,
       fx: this.fx.get(root) ?? NO_FX,
-      stamps: this.stamps,
+      local,
+      hover: false,
       collect: spec => void specs.push(spec),
     }
   }
@@ -237,7 +267,7 @@ export class BoardUi {
   entry(width: number, onOpen: () => void): Drawn {
     this.ticker.unmounted('band')
     this.ticker.unmounted('pane')
-    const tree = renderEntry(els as unknown as Els, { board: this.env.store.current().board, stale: this.stale }, async () => onOpen()) as unknown as Node
+    const tree = renderEntry(els as unknown as Els, { board: this.env.store.current().board, stale: this.stale, local: this.localView() }, async () => onOpen()) as unknown as Node
     return draw(tree, width, this.palette())
   }
 

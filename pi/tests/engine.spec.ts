@@ -4,6 +4,7 @@ import { join } from 'node:path'
 
 import { parseBoard } from '../../hooks/model/parse'
 import { NO_FX } from '../../hooks/view/effects'
+import { EMPTY_LOCAL } from '../../hooks/view/local'
 import { paletteFor } from '../../hooks/view/motion'
 import { compileBoard } from '../scripts/gen-board'
 import * as G from '../gen/board.js'
@@ -69,10 +70,11 @@ function fixture() {
   return r.board
 }
 
-function vm(width: number) {
+function vm(width: number, over: object = {}) {
   return {
     board: fixture(), error: null, bytes: 0, root: '/p', home: '/h', sessionId: 's', stale: false, expanded: {}, missing: new Set<string>(),
-    platform: 'darwin' as const, hasCode: true, canvas: true, width, palette: pal, mascot: true, motion: false, now: 0, calm: true, fx: NO_FX, stamps: {}, collect: () => undefined,
+    platform: 'darwin' as const, hasCode: true, canvas: true, width, palette: pal, mascot: true, motion: false, now: 0, calm: true, fx: NO_FX,
+    local: EMPTY_LOCAL, hover: false, collect: () => undefined, ...over,
   }
 }
 const actions = new Proxy({}, { get: () => async () => undefined }) as never
@@ -95,10 +97,27 @@ describe('the shared board view, drawn for pi', () => {
     const d = draw(G.renderBoard(els as never, vm(60) as never, actions, 'pane') as never, 60, pal)
     const t = plain(toLines(d.grid, true)).join('\n')
     expect(t).toContain('看板 · 记账小程序')
-    expect(t).toContain('待你处理')
-    expect(t).toContain('[ 验收通过 ]')
+    expect(t).toContain('待你看')
+    expect(t).toContain('[ 看过了 ]')
+    expect(t).not.toContain('验收通过')
     expect(t).toMatch(/▐▛███▜▙▞/)
     expect(t).toMatch(/◆ 1 +待你/)
+  })
+
+  test('without hover every link keeps [ 复制 ] [ × ] on screen and has no VS Code; its name opens it', () => {
+    const d = draw(G.renderBoard(els as never, vm(70) as never, actions, 'pane') as never, 70, pal)
+    const t = plain(toLines(d.grid, true)).join('\n')
+    expect(t).toMatch(/饼图\.html · 饼图预览 +\[ 复制 \] \[ × \]/)
+    expect(t).not.toContain('VS Code')
+    expect(d.hits.map(h => h.key)).toEqual(expect.arrayContaining(['todo-link:i-p3e2z8:0:open', 'todo-link:i-p3e2z8:0:copy', 'todo-link:i-p3e2z8:0:hide']))
+  })
+
+  test('with hover the link buttons wait in a hidden box, so pi (which has none) draws only the names', () => {
+    const d = draw(G.renderBoard(els as never, vm(70, { hover: true }) as never, actions, 'pane') as never, 70, pal)
+    const t = plain(toLines(d.grid, true)).join('\n')
+    expect(t).toContain('饼图.html · 饼图预览')
+    expect(t).not.toContain('[ × ]')
+    expect(t).toContain('[ 复制命令 ]')
   })
 
   test('the band is framed in a rounded box', () => {
@@ -109,7 +128,7 @@ describe('the shared board view, drawn for pi', () => {
   })
 
   test('the folded entry is one line', () => {
-    const d = draw(G.renderEntry(els as never, { board: fixture(), stale: false }, async () => undefined) as never, 80, pal)
+    const d = draw(G.renderEntry(els as never, { board: fixture(), stale: false, local: EMPTY_LOCAL }, async () => undefined) as never, 80, pal)
     expect(d.grid.h).toBe(1)
     expect(d.hits).toHaveLength(1)
   })

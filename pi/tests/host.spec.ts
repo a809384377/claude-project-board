@@ -6,7 +6,9 @@ import { join } from 'node:path'
 import { applyOps } from '../../hooks/model/ops'
 import { emptyBoard, serializeBoard } from '../../hooks/model/parse'
 import { BoardStore } from '../../hooks/store'
+import { localPath } from '../../hooks/view/local'
 import { nodeHost } from '../host'
+import { BoardUi } from '../ui/state'
 
 let dir = ''
 const host = () => nodeHost({ cwd: dir, sessionId: () => 'sess-1', notify: () => undefined, status: () => undefined, registerTool: () => undefined })
@@ -91,5 +93,52 @@ describe('the store on the real file system', () => {
     expect((await b.poll()).changed).toBe(true)
     expect(seen).toEqual(['external'])
     expect(b.current().board?.notes[0]?.title).toBe('from a')
+  })
+})
+
+describe('the pi board view keeps 看过了 and [×] on this machine', () => {
+  const tick = (): Promise<void> => new Promise(r => setTimeout(r, 30))
+
+  test('看过了 and [×] write the view file under the home directory; the board file is left as it was', async () => {
+    const home = join(dir, 'home')
+    const base = emptyBoard('demo')
+    base.goals.push({
+      id: 'g-1', title: '目标', outcome: '', status: 'active', links: [{ type: 'path', kind: '资料', target: 'g.md', label: '', forReview: false }], steps: [],
+      items: [{ id: 'i-1', title: '交上来的稿子', stepId: '', status: 'review', owner: '', note: '', waitingFor: '', dependsOn: [], scope: [], acceptance: '',
+        links: [{ type: 'path', kind: '稿', target: 'a.md', label: '', forReview: true }], noReviewTargetReason: '', reportedAt: '2026-10-11T09:00:00+08:00', session: '', doneBy: '',
+        createdAt: ctx.now, updatedAt: ctx.now, doneAt: '' }],
+      createdAt: ctx.now, updatedAt: ctx.now,
+    })
+    base.focus = { text: '目标', goalId: 'g-1', mandate: '', updatedAt: ctx.now }
+    await mkdir(join(dir, 'ai'))
+    const text = serializeBoard(base)
+    await writeFile(join(dir, 'ai', 'board.json'), text)
+    const store = new BoardStore(host())
+    await store.locate()
+    const ui = new BoardUi({ host: host(), store, requestRender: () => undefined, motion: false, mascot: false, home })
+    const press = async (key: string): Promise<void> => {
+      const d = ui.board(80, 'pane', 'pane')
+      const hit = d.hits.find(h => h.key === key)
+      if (hit === undefined) throw new Error(`no button ${key}: ${d.hits.map(h => h.key).join(' ')}`)
+      ui.press(d.hits, hit.x, hit.y)
+      await tick()
+    }
+    const screen = (): string => {
+      const d = ui.board(80, 'pane', 'pane')
+      return d.grid.rows.map(r => r.map(c => c.ch).join('')).join('\n')
+    }
+    ui.board(80, 'pane', 'pane')
+    await tick()
+    expect(screen()).toContain('待你看')
+    await press('seen:i-1')
+    expect(screen()).not.toContain('待你看')
+    expect(screen()).toContain('已看')
+    await press('link:g-1:0:hide')
+    expect(screen()).toContain('已隐藏 1 条')
+    const file = JSON.parse(await readFile(localPath(home, dir), 'utf8'))
+    expect(Object.keys(file.seen)).toEqual(['i-1'])
+    expect(file.hidden).toEqual({ 'g-1': ['g.md'] })
+    expect(await readFile(join(dir, 'ai', 'board.json'), 'utf8')).toBe(text)
+    ui.dispose()
   })
 })

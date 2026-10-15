@@ -63,7 +63,7 @@ export function isAlive(fx: Effects, now: number): boolean {
  */
 export function deriveEffects(prev: Effects, change: Change, now: number): Effects {
   const old = prune(prev, now)
-  const { before, after, source } = change
+  const { before, after } = change
   if (before === null || after === null) return old
 
   const bItems = itemsOf(before)
@@ -75,8 +75,7 @@ export function deriveEffects(prev: Effects, change: Change, now: number): Effec
   const inNewGoal = new Set(newGoals.map(g => g.id))
   const goalOfItem = new Map(after.goals.flatMap(g => g.items.map(i => [i.id, g.id] as const)))
 
-  // Items that are new, changed or gone. Rows in a new goal are covered by that goal's own ripple; the row the
-  // user's own button just stamped has its stamp; the step they sit in still lights up.
+  // Items that are new, changed or gone. Rows in a new goal are covered by that goal's own ripple.
   const differing = new Set<string>()
   const touchedItems = new Set<string>()
   for (const [id, it] of aItems) {
@@ -84,7 +83,6 @@ export function deriveEffects(prev: Effects, change: Change, now: number): Effec
     if (was !== undefined && JSON.stringify(was) === JSON.stringify(it)) continue
     differing.add(id)
     if (inNewGoal.has(goalOfItem.get(id) ?? '')) continue
-    if (source === 'user' && was?.status === 'review' && it.status === 'done') continue
     touchedItems.add(id)
   }
   for (const id of bItems.keys()) if (!aItems.has(id)) differing.add(id)
@@ -142,13 +140,12 @@ export function deriveEffects(prev: Effects, change: Change, now: number): Effec
 }
 
 /**
- * A string that changes whenever something drawn as text (not as canvas) moves on: ripple steps, stamp phases,
- * which confetti is running. A timer redraws the board when it changes.
+ * A string that changes whenever something drawn as text (not as canvas) moves on: ripple steps, which confetti
+ * is running. A timer redraws the board when it changes.
  */
-export function textSignature(fx: Effects, stamps: Readonly<Record<string, number>>, now: number): string {
+export function textSignature(fx: Effects, now: number): string {
   const parts: string[] = []
   for (const [id, s] of Object.entries(fx.ripples)) parts.push(`r${id}:${rippleStep(s, now)}`)
-  for (const [id, s] of Object.entries(stamps)) parts.push(`s${id}:${now - s < 150 ? 0 : now - s < 320 ? 1 : 2}`)
   for (const [id, s] of Object.entries(fx.confetti)) parts.push(`c${id}:${now - s < CONFETTI_MS ? 1 : 0}`)
   return parts.sort().join('|')
 }

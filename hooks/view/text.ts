@@ -1,4 +1,5 @@
 import type { Board, ItemStatus, Proposal } from '../model/types'
+import { isWaiting, type LocalView } from './local'
 
 /** Plain-text pieces of the board view that need no drawing engine: shared by the Claude Code view and the pi widget. */
 
@@ -33,7 +34,7 @@ export function describeProposal(b: Board, p: Proposal): string {
 }
 
 /** The one line shown when the pane is not on screen. */
-export function entryText(vm: { board: Board | null; stale: boolean }): string {
+export function entryText(vm: { board: Board | null; stale: boolean; local: LocalView }): string {
   const warn = vm.stale ? ' ⚠' : ''
   if (vm.board === null) return `看板${warn} · 文件无法读取 · /board 查看`
   let running = 0
@@ -41,13 +42,13 @@ export function entryText(vm: { board: Board | null; stale: boolean }): string {
   for (const g of vm.board.goals) {
     for (const it of g.items) {
       if (it.status === 'running') running++
-      else if (it.status === 'review') review++
+      else if (isWaiting(vm.local, it)) review++
     }
   }
   const asks = vm.board.proposals.length
   const parts = [`看板${warn}`]
   if (running > 0) parts.push(`在跑 ${running}`)
-  if (review > 0) parts.push(`待验收 ${review}`)
+  if (review > 0) parts.push(`待你看 ${review}`)
   if (asks > 0) parts.push(`待确认 ${asks}`)
   if (parts.length === 1) parts.push('暂无进行中事项')
   parts.push('/board 打开')

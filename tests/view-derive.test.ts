@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'claude-code/testing'
 import { emptyBoard } from '../hooks/model/parse'
 import type { Board, Goal, Item, Link, Step } from '../hooks/model/types'
-import { boardCounts, defaultOpenUnits, goalOpen, listedItems, openItems, partitionGoals, reviewItems, shownLinks, unitOpen, unitsOf } from '../hooks/view/derive'
+import { boardCounts, defaultOpenUnits, goalLinksInline, goalOpen, LINKS_INLINE, listedItems, openItems, partitionGoals, reviewItems, shownLinks, unitOpen, unitsOf } from '../hooks/view/derive'
+import { EMPTY_LOCAL, hideLink, markSeen } from '../hooks/view/local'
 
 const NOW = '2026-10-12T09:00:00+08:00'
 const item = (id: string, over: Partial<Item> = {}): Item => ({
@@ -19,7 +20,15 @@ describe('boardCounts', () => {
       goal('a', [item('1', { status: 'review' }), item('2', { status: 'running' }), item('3', { status: 'todo' }), item('4', { status: 'queued' }), item('5', { status: 'doing' }), item('6', { status: 'done' }), item('7', { status: 'dropped' })]),
       goal('p', [item('8', { status: 'review' }), item('9', { status: 'running' }), item('10', { status: 'todo' }), item('11', { status: 'done' })], { status: 'paused' }),
     ])
-    expect(boardCounts(b)).toEqual({ review: 2, running: 1, todo: 3, done: 2 })
+    expect(boardCounts(b, EMPTY_LOCAL)).toEqual({ review: 2, running: 1, todo: 3, done: 2 })
+  })
+  test('waiting for you leaves out what this user has looked at or hidden every entry of', () => {
+    const rev = item('1', { status: 'review', reportedAt: NOW })
+    const hid = item('2', { status: 'review', links: [{ ...link('x.md'), forReview: true }] })
+    const b = boardOf([goal('a', [rev, hid, item('3', { status: 'review' })])])
+    const lv = hideLink(markSeen(EMPTY_LOCAL, rev), '2', 'x.md')
+    expect(boardCounts(b, lv)).toEqual({ review: 1, running: 0, todo: 0, done: 0 })
+    expect(reviewItems(b, lv).map(r => r.item.id)).toEqual(['3'])
   })
 })
 
@@ -101,15 +110,24 @@ describe('what is on screen', () => {
     expect(listedItems(b, { s2: true }, 'pane').map(i => i.id)).toEqual(['a1', 'b1'])
     expect(listedItems(b, { g: false }, 'pane')).toEqual([])
   })
-  test('details are open for review items; links to check are those on screen', () => {
-    expect(openItems(b, {}, 'pane').map(i => i.id)).toEqual(['a1'])
-    const t = (links: readonly Link[]): string[] => links.map(l => l.target).sort()
-    expect(t(shownLinks(b, {}, 'pane'))).toEqual(['a.md', 'g.md', 's1.md'])
-    expect(t(shownLinks(b, { s2: true }, 'pane'))).toContain('s2.md')
-    expect(t(shownLinks(b, { g: false }, 'pane'))).toEqual([])
+  const t = (links: readonly Link[]): string[] => links.map(l => l.target).sort()
+  test('details open only when asked, review items too; links to check are those on screen', () => {
+    expect(openItems(b, {}, 'pane').map(i => i.id)).toEqual([])
+    expect(openItems(b, { a1: true }, 'pane').map(i => i.id)).toEqual(['a1'])
+    expect(t(shownLinks(b, {}, 'pane', EMPTY_LOCAL))).toEqual(['g.md', 's1.md'])
+    expect(t(shownLinks(b, { s2: true }, 'pane', EMPTY_LOCAL))).toContain('s2.md')
+    expect(t(shownLinks(b, { g: false }, 'pane', EMPTY_LOCAL))).toEqual([])
   })
-  test('review rows carry the step; pinned ids stay listed after they are done', () => {
-    expect(reviewItems(b).map(r => [r.item.id, r.step?.id])).toEqual([['a1', 's1']])
-    expect(reviewItems(b, new Set(['d'])).map(r => r.item.id)).toEqual(['a1', 'd'])
+  test('hidden links are not checked; the focus goal lists up to three links, any other goal folds them', () => {
+    expect(t(shownLinks(b, { a1: true }, 'pane', hideLink(hideLink(EMPTY_LOCAL, 'g', 'g.md'), 'a1', 'a.md')))).toEqual(['s1.md'])
+    expect(t(shownLinks(b, { a1: true }, 'pane', hideLink(EMPTY_LOCAL, 'a1', 'g.md')))).toEqual(['a.md', 'g.md', 's1.md'])
+    expect(goalLinksInline(b, g)).toBe(LINKS_INLINE)
+    const other = boardOf([g])
+    expect(goalLinksInline(other, g)).toBe(0)
+    expect(t(shownLinks(other, { g: true }, 'pane', EMPTY_LOCAL))).toEqual(['s1.md'])
+    expect(t(shownLinks(other, { g: true, 'links:g': true }, 'pane', EMPTY_LOCAL))).toEqual(['g.md', 's1.md'])
+  })
+  test('review rows carry the step', () => {
+    expect(reviewItems(b, EMPTY_LOCAL).map(r => [r.item.id, r.step?.id])).toEqual([['a1', 's1']])
   })
 })

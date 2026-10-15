@@ -1,5 +1,6 @@
 import { goalState, isOpen, itemsOfStep, progressOf, stepState, type GoalState, type Progress, type StepState } from '../model/derive'
 import type { Board, Goal, Item, ItemStatus, Link, Step } from '../model/types'
+import { isWaiting, visibleLinks, type LocalView } from './local'
 
 /** Pure derivations the board view draws from: order, open/closed rules, counts. */
 
@@ -71,7 +72,7 @@ export function goalOpen(b: Board, g: Goal, expanded: Record<string, boolean>, m
   return s === 'review' || s === 'running'
 }
 
-export const itemOpen = (it: Item, expanded: Record<string, boolean>): boolean => expanded[it.id] ?? it.status === 'review'
+export const itemOpen = (it: Item, expanded: Record<string, boolean>): boolean => expanded[it.id] === true
 
 /** Items listed as rows: live ones in goals that are open, and in units that are open when the goal has steps. */
 export function listedItems(b: Board, expanded: Record<string, boolean>, mode: Mode): Item[] {
@@ -89,49 +90,58 @@ export function listedItems(b: Board, expanded: Record<string, boolean>, mode: M
 /** Items whose details are on screen: what register.ts checks the files of. */
 export const openItems = (b: Board, expanded: Record<string, boolean>, mode: Mode): Item[] => listedItems(b, expanded, mode).filter(it => itemOpen(it, expanded))
 
-/** A goal's or a step's attached links are listed when there are at most this many; more fold into "资料 N 条". */
-export const GOAL_LINKS_INLINE = 3
-/** Review items the "待你处理" block lists. */
+/** A step's links, and the focus goal's, are listed when there are at most this many; more fold into "资料 N 条". */
+export const LINKS_INLINE = 3
+/** Links listed under a goal's title before they fold: the focus goal's up to {@link LINKS_INLINE}; any other goal's always fold. */
+export const goalLinksInline = (b: Board, g: Goal): number => (g.id === b.focus.goalId ? LINKS_INLINE : 0)
+/** Review items the "待你看" block lists. */
 export const ATTENTION_LIMIT = 10
 
 export type ReviewRow = { goal: Goal; step: Step | undefined; item: Item }
 
-/** Review items waiting for the user, in every goal, paused ones included; `pinned` ids (just stamped) stay listed. */
-export function reviewItems(b: Board, pinned: ReadonlySet<string> = new Set()): ReviewRow[] {
+/** Review items still waiting for this user's look, in every goal, paused ones included. */
+export function reviewItems(b: Board, lv: LocalView): ReviewRow[] {
   return b.goals.flatMap(goal =>
-    goal.items
-      .filter(item => item.status === 'review' || pinned.has(item.id))
-      .map(item => ({ goal, step: goal.steps.find(s => s.id === item.stepId), item })),
+    goal.items.filter(item => isWaiting(lv, item)).map(item => ({ goal, step: goal.steps.find(s => s.id === item.stepId), item })),
   )
 }
 
-export const linksOpen = (links: readonly Link[], key: string, expanded: Record<string, boolean>): boolean => links.length <= GOAL_LINKS_INLINE || expanded[key] === true
+export const linksOpen = (links: readonly Link[], key: string, expanded: Record<string, boolean>, inline: number = LINKS_INLINE): boolean =>
+  links.length <= inline || expanded[key] === true
 
-/** Every link that has buttons on screen: what register.ts checks the files of. */
-export function shownLinks(b: Board, expanded: Record<string, boolean>, mode: Mode): Link[] {
+/** Every link that has buttons on screen: what register.ts checks the files of. Links this user hid are left out. */
+export function shownLinks(b: Board, expanded: Record<string, boolean>, mode: Mode, lv: LocalView): Link[] {
   const out: Link[] = []
-  for (const it of openItems(b, expanded, mode)) out.push(...it.links)
+  const shown = (ownerId: string, links: readonly Link[], inline: number): void => {
+    const vis = visibleLinks(lv, ownerId, links)
+    if (linksOpen(vis, `links:${ownerId}`, expanded, inline)) out.push(...vis)
+  }
+  for (const it of openItems(b, expanded, mode)) out.push(...visibleLinks(lv, it.id, it.links))
   const { active, paused, finished } = partitionGoals(b)
   for (const g of active) {
     if (!goalOpen(b, g, expanded, mode)) continue
-    if (linksOpen(g.links, `links:${g.id}`, expanded)) out.push(...g.links)
-    for (const s of g.steps) if (unitOpen(g, { id: s.id, step: s, items: [] }, expanded) && linksOpen(s.links, `links:${s.id}`, expanded)) out.push(...s.links)
+    shown(g.id, g.links, goalLinksInline(b, g))
+    for (const s of g.steps) if (unitOpen(g, { id: s.id, step: s, items: [] }, expanded)) shown(s.id, s.links, LINKS_INLINE)
   }
-  for (const g of [...paused, ...finished]) if (expanded[g.id] === true && linksOpen(g.links, `links:${g.id}`, expanded)) out.push(...g.links)
-  for (const { item } of reviewItems(b).slice(0, ATTENTION_LIMIT)) out.push(...item.links.filter(l => l.forReview))
+  for (const g of [...paused, ...finished]) if (expanded[g.id] === true) shown(g.id, g.links, goalLinksInline(b, g))
+  for (const { item } of reviewItems(b, lv).slice(0, ATTENTION_LIMIT)) out.push(...visibleLinks(lv, item.id, item.links).filter(l => l.forReview))
   return out
 }
 
 export type Counts = { review: number; running: number; todo: number; done: number }
 
-/** The four numbers of the status block. Waiting for you counts paused goals too; running and to-do do not. */
-export function boardCounts(b: Board): Counts {
+/**
+ * The four numbers of the status block. Waiting for you counts review items this user has not looked at yet, paused
+ * goals too; running and to-do leave paused goals out.
+ */
+export function boardCounts(b: Board, lv: LocalView): Counts {
   const out: Counts = { review: 0, running: 0, todo: 0, done: 0 }
   for (const g of b.goals) {
     for (const it of g.items) {
       if (it.status === 'done') out.done++
-      else if (it.status === 'review') out.review++
-      else if (g.status === 'paused') continue
+      else if (it.status === 'review') {
+        if (isWaiting(lv, it)) out.review++
+      } else if (g.status === 'paused') continue
       else if (it.status === 'running') out.running++
       else if (it.status === 'todo' || it.status === 'queued' || it.status === 'doing') out.todo++
     }

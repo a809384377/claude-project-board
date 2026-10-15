@@ -57,18 +57,13 @@ describe('ripples', () => {
     const moved = edit(b, 'c', { stepId: 's1' })
     expect(Object.keys(derive(b, moved).ripples).sort()).toEqual(['c', 's1', 's2'])
   })
-  test('a button of the user does not ripple the row it pressed, but the step around it and everything else still do', () => {
+  test('a review item turning done lights its row and its step, whoever wrote it', () => {
     const b = base()
-    const after = edit(edit(b, 'b', { status: 'done', doneBy: 'user' }), 'x', { note: '同时被 Claude 改了' })
-    const fx = derive(b, after, 'user')
-    expect(fx.ripples.b).toBeUndefined()
-    expect(fx.ripples.s1).toBe(T0)
-    expect(fx.ripples.x).toBe(T0)
-    // the same change from Claude lights the row too
-    expect(derive(b, edit(b, 'b', { status: 'done', doneBy: 'claude' }), 'agent').ripples.b).toBe(T0)
-  })
-  test('a user change other than approving a review item still ripples its row', () => {
-    const b = base()
+    for (const source of ['user', 'agent', 'external'] as const) {
+      const fx = derive(b, edit(b, 'b', { status: 'done', doneBy: source === 'user' ? 'user' : 'claude' }), source)
+      expect(fx.ripples.b).toBe(T0)
+      expect(fx.ripples.s1).toBe(T0)
+    }
     expect(derive(b, edit(b, 'c', { status: 'doing' }), 'user').ripples.c).toBe(T0)
   })
   test('a new goal lights its head; its steps and items do not', () => {
@@ -157,16 +152,16 @@ describe('confetti', () => {
 })
 
 describe('what a timer needs to know about text-borne effects', () => {
-  test('the signature moves with ripple steps, stamp phases and the end of confetti', () => {
+  test('the signature moves with ripple steps and the end of confetti', () => {
     const b = base()
     const fx = derive(b, edit(b, 'a', { status: 'review' }))
-    const at = (dt: number, stamps = {}): string => textSignature(fx, stamps, T0 + dt)
+    const at = (dt: number): string => textSignature(fx, T0 + dt)
     expect(at(0)).not.toBe(at(250))
     expect(at(0)).toBe(at(100))
     expect(at(0)).not.toBe(at(600))
-    expect(at(0, { b: T0 })).not.toBe(at(200, { b: T0 }))
-    expect(at(200, { b: T0 })).not.toBe(at(400, { b: T0 }))
-    expect(at(400, { b: T0 })).toBe(at(450, { b: T0 }))
-    expect(textSignature(NO_FX, {}, T0)).toBe('')
+    const one = boardOf(goal('g1', [item('a', { stepId: 's1', status: 'review' })], [step('s1')]))
+    const party = derive(one, edit(one, 'a', { status: 'done' }))
+    expect(textSignature(party, T0 + CONFETTI_MS - 1)).not.toBe(textSignature(party, T0 + CONFETTI_MS))
+    expect(textSignature(NO_FX, T0)).toBe('')
   })
 })

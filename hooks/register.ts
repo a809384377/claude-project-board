@@ -10,9 +10,10 @@ import { isoLocal } from './time'
 import { handleTool, specsFor, TOOL_NAMES } from './tools'
 import { decideLayout, parseSetting, wantsPane, wholeScreen, type LayoutKind, type LayoutSetting, type Viewport } from './view/layout'
 import { detectEnv, resolveTarget, type Platform } from './view/links'
-import { makeActions, renderBoard, renderEntry, renderNotice, STAMP_MS, shownLinks, type Actions, type Mode, type StoreActions, type ViewModel } from './view/board'
+import { makeActions, renderBoard, renderEntry, renderNotice, shownLinks, type Actions, type Mode, type StoreActions, type ViewModel } from './view/board'
 import { deriveEffects, isAlive, NO_FX, textSignature, type Effects } from './view/effects'
 import { boardCounts } from './view/derive'
+import { EMPTY_LOCAL, hideLink, LocalStore, localPath, markSeen, unhideLink, type LocalView } from './view/local'
 import { paletteFor, type Palette, type RasterSpec } from './view/motion'
 import { CALM_AFTER_MS, Ticker, type TickerDeps, type TickerView } from './view/ticker'
 
@@ -78,12 +79,12 @@ interface ViewState {
   reduceMotion: boolean
   /** The theme's colours; null for `auto`, the ANSI themes and names this code does not know. */
   palette: Palette | null
-  /** Review items just stamped: id -> when the button was pressed. */
-  stamps: Readonly<Record<string, number>>
+  /** What the user looked at or hid on this machine (shared with pi through one file per project). */
+  local: LocalStore | null
   /** Facts about the machine and session that the drawing reuses: asked once per session. */
   ambient: { platform: Platform; hasCode: boolean; home: string; sessionId: string } | null
-  /** Which linked files are missing in each layout, for the board and the open/closed choices it was computed for. */
-  missingCache: { board: unknown; key: string; missing: Record<Mode, ReadonlySet<string>> } | null
+  /** Which linked files are missing in each layout, for the board, the open/closed choices and the local view it was computed for. */
+  missingCache: { board: unknown; key: string; local: LocalView; missing: Record<Mode, ReadonlySet<string>> } | null
   /** The check that fills `ambient` and `missingCache`, while it runs. */
   warming: Promise<void> | null
   /** One-off effects per project root (the store holds one root; the map keeps a replaced one apart). */
@@ -96,7 +97,7 @@ interface ViewState {
   ticker: Ticker | null
 }
 const newViewState = (mascotOn: boolean, motionOn: boolean): ViewState => ({
-  mascotOn, motionOn, reduceMotion: false, palette: null, stamps: {}, ambient: null, missingCache: null, fx: new Map(), root: '', lastActive: 0, continuous: false, ticker: null, warming: null,
+  mascotOn, motionOn, reduceMotion: false, palette: null, local: null, ambient: null, missingCache: null, fx: new Map(), root: '', lastActive: 0, continuous: false, ticker: null, warming: null,
 })
 
 /** Motion shows when the plugin's setting allows it and the system does not ask for less. */
@@ -125,8 +126,8 @@ function tickerViewOf(v: ViewState): TickerView {
   const fxNow = (): Effects => v.fx.get(v.root) ?? NO_FX
   return {
     continuous: () => v.continuous,
-    oneShot: now => isAlive(fxNow(), now) || Object.values(v.stamps).some(at => now - at < STAMP_MS),
-    signature: now => textSignature(fxNow(), v.stamps, now),
+    oneShot: now => isAlive(fxNow(), now),
+    signature: now => textSignature(fxNow(), now),
     lastActive: () => v.lastActive,
   }
 }
@@ -153,9 +154,21 @@ async function touch($: EngineInterface, v: ViewState): Promise<void> {
   void tickerOf($, v).ensure()
 }
 
+/** The local view file of the project on screen; null before the board or the home directory is known. */
+function localPathOf(s: BoardStore, v: ViewState): string | null {
+  const root = s.current().root
+  const home = v.ambient?.home ?? ''
+  return root === null || home === '' ? null : localPath(home, root)
+}
+
+const localOf = (s: BoardStore, v: ViewState): LocalView => {
+  const path = localPathOf(s, v)
+  return path === null || v.local === null ? EMPTY_LOCAL : v.local.get(path)
+}
+
 /**
- * Asks the machine what the drawing reuses: the platform and session once, and which linked files are missing
- * for the board and the open/closed choices as they are now. The drawing never checks files itself: it waits
+ * Asks the machine what the drawing reuses: the platform and session once, the local view file once, and which
+ * linked files are missing for the board, the open/closed choices and the local view as they are now. The drawing never checks files itself: it waits
  * here only when this has not run for what it is about to draw.
  */
 function warm($: EngineInterface, h: Host, s: BoardStore, v: ViewState, expanded: Record<string, boolean>): Promise<void> {
@@ -164,16 +177,19 @@ function warm($: EngineInterface, h: Host, s: BoardStore, v: ViewState, expanded
       const env = await detectEnv(h)
       v.ambient = { ...env, home: (await $.env.get('HOME').catch(() => undefined)) ?? '', sessionId: await h.sessionId() }
     }
+    const path = localPathOf(s, v)
+    if (path !== null) await v.local?.load(path)
     const cur = s.current()
     const key = JSON.stringify(expanded)
-    if (v.missingCache !== null && v.missingCache.board === cur.board && v.missingCache.key === key) return
+    const local = localOf(s, v)
+    if (v.missingCache !== null && v.missingCache.board === cur.board && v.missingCache.key === key && v.missingCache.local === local) return
     const home = v.ambient.home
     const root = cur.root ?? ''
     const known = new Map<string, boolean>()
     const missingIn = async (mode: Mode): Promise<ReadonlySet<string>> => {
       const missing = new Set<string>()
       if (cur.board === null) return missing
-      for (const l of shownLinks(cur.board, expanded, mode)) {
+      for (const l of shownLinks(cur.board, expanded, mode, local)) {
         if (l.type !== 'path') continue
         const abs = resolveTarget(l.target, root, home)
         let there = known.get(abs)
@@ -185,7 +201,7 @@ function warm($: EngineInterface, h: Host, s: BoardStore, v: ViewState, expanded
       }
       return missing
     }
-    v.missingCache = { board: cur.board, key, missing: { pane: await missingIn('pane'), 'band-full': await missingIn('band-full') } }
+    v.missingCache = { board: cur.board, key, local, missing: { pane: await missingIn('pane'), 'band-full': await missingIn('band-full') } }
   })().finally(() => {
     v.warming = null
   })
@@ -198,25 +214,35 @@ async function viewOf($: EngineInterface, h: Host, s: BoardStore, mode: Mode, wi
   const expanded = await read($, expandedAtom)
   const stale = await read($, staleAtom)
   const key = JSON.stringify(expanded)
-  const fresh = (): boolean => v.ambient !== null && v.missingCache !== null && v.missingCache.board === cur.board && v.missingCache.key === key
+  const fresh = (): boolean =>
+    v.ambient !== null && v.missingCache !== null && v.missingCache.board === cur.board && v.missingCache.key === key && v.missingCache.local === localOf(s, v)
   // A check that was already running may have been for an older choice of open/closed: ask once more.
   for (let n = 0; n < 2 && !fresh(); n++) await warm($, h, s, v, expanded)
   const amb = v.ambient as NonNullable<ViewState['ambient']>
   const root = cur.root ?? ''
   v.root = root
   const now = await h.now()
-  const counts = cur.board === null ? null : boardCounts(cur.board)
+  const local = localOf(s, v)
+  const counts = cur.board === null ? null : boardCounts(cur.board, local)
   v.continuous = counts !== null && (counts.running > 0 || counts.review > 0 || (cur.board?.proposals.length ?? 0) > 0 || stale)
   return {
     board: cur.board, error: cur.error, bytes: cur.bytes, root, home: amb.home, sessionId: amb.sessionId, stale, expanded,
     missing: v.missingCache?.missing[mode] ?? new Set(), platform: amb.platform, hasCode: amb.hasCode,
-    canvas, width, palette: v.palette, mascot: v.mascotOn, stamps: v.stamps,
+    canvas, width, palette: v.palette, mascot: v.mascotOn, local, hover: canvas,
     motion: canvas && animated(v), now, calm: now - v.lastActive >= CALM_AFTER_MS, fx: v.fx.get(root) ?? NO_FX,
     collect: spec => void specs.push(spec),
   }
 }
 
-function actionsOf($: EngineInterface, base: StoreActions, v: ViewState): Actions {
+function actionsOf($: EngineInterface, s: BoardStore, base: StoreActions, v: ViewState): Actions {
+  /** Changes the local view file and draws again; the board file and Claude never hear of it. */
+  const local = async (fn: (lv: LocalView) => LocalView): Promise<void> => {
+    void touch($, v)
+    const path = localPathOf(s, v)
+    if (path === null || v.local === null) return
+    await v.local.update(path, fn)
+    $.ui.invalidate('ui.render')
+  }
   return {
     ...base,
     toggle: async (key, open) => {
@@ -230,25 +256,13 @@ function actionsOf($: EngineInterface, base: StoreActions, v: ViewState): Action
     approveProposal: id => (void touch($, v), base.approveProposal(id)),
     rejectProposal: id => (void touch($, v), base.rejectProposal(id)),
     focusGoal: id => (void touch($, v), base.focusGoal(id)),
-    // The stamp goes up before the file is written and stays long enough to be seen.
-    approveItem: async id => {
-      if (v.stamps[id] !== undefined) return false
-      const start = await $.clock.now()
-      v.lastActive = start
-      v.stamps = { ...v.stamps, [id]: start }
-      $.ui.invalidate('ui.render')
-      void tickerOf($, v).ensure()
-      const ok = await base.approveItem(id)
-      const left = ok ? STAMP_MS - ((await $.clock.now()) - start) : 0
-      const drop = (): void => {
-        const { [id]: _gone, ...rest } = v.stamps
-        v.stamps = rest
-        $.ui.invalidate('ui.render')
-      }
-      if (left > 0) $.clock.after(left, drop)
-      else drop()
-      return ok
-    },
+    markSeen: id =>
+      local(lv => {
+        const it = s.current().board?.goals.flatMap(g => g.items).find(i => i.id === id)
+        return it === undefined ? lv : markSeen(lv, it)
+      }),
+    hideLink: (ownerId, target) => local(lv => hideLink(lv, ownerId, target)),
+    unhideLink: (ownerId, target) => local(lv => unhideLink(lv, ownerId, target)),
   }
 }
 
@@ -364,11 +378,11 @@ export const register: Register = (on, options) => {
     sync = new Sync(host, board)
     shell = shellOf($)
     storeActions = makeActions(h, board, async () => isoLocal(await h.now()))
+    view.local = new LocalStore(h)
     paneAsked = false
     closedForShape = false
     closing = false
     toolsMode = 'none'
-    view.stamps = {}
     view.lastActive = await $.clock.now()
     view.ambient = null
     view.missingCache = null
@@ -532,7 +546,7 @@ export const register: Register = (on, options) => {
     closing = false
     if (host === null || store === null || storeActions === null) return next(e)
     const specs: RasterSpec[] = []
-    const tree = renderBoard(els, await viewOf($, host, store, 'pane', bodyColumns, e.surface === 'terminal', view, specs), actionsOf($, storeActions, view), 'pane')
+    const tree = renderBoard(els, await viewOf($, host, store, 'pane', bodyColumns, e.surface === 'terminal', view, specs), actionsOf($, store, storeActions, view), 'pane')
     placeOnTicker($, view, PANE_ID, specs)
     return tree
   })
@@ -571,7 +585,7 @@ export const register: Register = (on, options) => {
     if (host === null || storeActions === null) return next(e)
     const specs: RasterSpec[] = []
     const vm = await viewOf($, host, store, 'band-full', e.props.bodyColumns, e.surface === 'terminal', view, specs)
-    const actions = actionsOf($, storeActions, view)
+    const actions = actionsOf($, store, storeActions, view)
     const h = host
     const onOpen = async (): Promise<void> => h.toast(await openBoard($, wantsPane(screen, setting), landsDocked({ isFullscreen: e.viewport?.isFullscreen === true, columns: screen?.columns ?? 0 })))
     if (kind !== 'band-full' || (await read($, bandHiddenAtom))) {

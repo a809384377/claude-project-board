@@ -2,17 +2,18 @@ import type { Elements, RenderElement } from 'claude-code'
 
 import type { Host } from '../host'
 import { goalShortName, goalState, STEP_ICON, stepShortName } from '../model/derive'
-import { applyOps, type ApplyResult, type OpCtx } from '../model/ops'
+import type { ApplyResult, OpCtx } from '../model/ops'
 import { NEWER_SCHEMA_TEXT } from '../model/parse'
 import { approve, propose, reject } from '../model/propose'
-import type { Board, Goal, Item, ItemStatus, Link } from '../model/types'
+import type { Board, Goal, Item, ItemStatus, Link, Step } from '../model/types'
 import type { BoardStore } from '../store'
 import {
   ATTENTION_LIMIT,
   boardCounts,
   fractionOf,
-  GOAL_LINKS_INLINE,
+  goalLinksInline,
   itemOpen,
+  LINKS_INLINE,
   linksOpen,
   looseItems,
   goalOpen,
@@ -29,6 +30,7 @@ import {
   type Unit,
 } from './derive'
 import { rippleStep, type Effects } from './effects'
+import { hiddenLinks, isWaiting, type LocalView } from './local'
 import { clip, describeProposal, entryText, STATUS_ICON } from './text'
 export { describeProposal, entryText } from './text'
 import { linkActions, pressLink, resolveTarget, type LinkAction, type Platform } from './links'
@@ -44,7 +46,6 @@ import {
   CELL_FULL,
   chipCells,
   chipLit,
-  contrastFg,
   statusGreen,
   chipDigits,
   chipWidth,
@@ -66,7 +67,7 @@ import {
   type RasterSpec,
 } from './motion'
 
-export { ATTENTION_LIMIT, GOAL_LINKS_INLINE, openItems, shownLinks, type Mode } from './derive'
+export { ATTENTION_LIMIT, LINKS_INLINE, openItems, shownLinks, type Mode } from './derive'
 
 /** Raster only exists on the terminal surface; elsewhere the text version is drawn. */
 export type Els = Pick<Elements['terminal'], 'Box' | 'Text' | 'Button'> & { Raster?: Elements['terminal']['Raster'] }
@@ -106,8 +107,10 @@ export interface ViewModel {
   calm: boolean
   /** One-off effects under way. */
   fx: Effects
-  /** Review items just stamped: id -> when the button was pressed. */
-  stamps: Readonly<Record<string, number>>
+  /** What this machine's user looked at or hid; never part of the board file. */
+  local: LocalView
+  /** The surface reveals boxes under the pointer (the terminal); elsewhere every button is drawn all the time. */
+  hover: boolean
   /** Called with every Raster the drawing mounts, so a timer can repaint it. */
   collect: (spec: RasterSpec) => void
 }
@@ -117,22 +120,28 @@ export interface Actions {
   toggle(key: string, open: boolean): Promise<void>
   /** Several open/closed choices at once. */
   toggleMany(entries: Record<string, boolean>): Promise<void>
-  /** Resolves to whether the item was written as done. */
-  approveItem(itemId: string): Promise<boolean>
+  /** The user looked at this hand-in of a review item. Kept on this machine only, like the two below. */
+  markSeen(itemId: string): Promise<void>
+  /** Hides one link under its goal, step or item. */
+  hideLink(ownerId: string, target: string): Promise<void>
+  unhideLink(ownerId: string, target: string): Promise<void>
   approveProposal(proposalId: string): Promise<void>
   rejectProposal(proposalId: string): Promise<void>
   focusGoal(goalId: string): Promise<void>
   link(action: LinkAction, surface: string): Promise<void>
 }
-export type StoreActions = Omit<Actions, 'toggle' | 'toggleMany'>
+/** The actions that write the board file; the rest only change what this machine shows. */
+export type StoreActions = Omit<Actions, 'toggle' | 'toggleMany' | 'markSeen' | 'hideLink' | 'unhideLink'>
 
 export const ARCHIVE_WARN_BYTES = 2 * 1024 * 1024
 const NOTE_LIMIT = 400
 /** Rows of detail one drawing may carry: a huge board is cut here so the tree stays small enough to draw. */
 export const ITEM_BUDGET = 50
 export const GOAL_LIMIT = 40
-/** A stamped row stays where it was this long: 0.35 s for the stamp to go through its three looks, then as long again in green. */
-export const STAMP_MS = 700
+/** A running item another session reported this long ago reads as possibly stopped. */
+export const STALE_RUN_MS = 12 * 3600_000
+/** Characters of the waiting-for text in an item row; the whole text is in the details. */
+const WAIT_TAG = 12
 const BAR_COLS = { pane: 12, 'band-full': 8 } as const
 
 type Budget = { left: number }
@@ -140,7 +149,6 @@ type Ctx = { els: Els; vm: ViewModel; actions: Actions; mode: Mode; budget: Budg
 
 // ---------- pure helpers (also used by register.ts) ----------
 
-const firstLine = (s: string): string => clip((s.split('\n')[0] ?? '').trim(), 200)
 const isMine = (it: Item, vm: ViewModel): boolean => it.session === vm.sessionId && it.session !== ''
 
 /** The status green as a Text colour: the fixed green when the theme's colours are known, else the theme's own `success`. */
@@ -163,6 +171,23 @@ function shortTime(iso: string): string {
   return m ? `${m[1]} ${m[2]}` : iso
 }
 
+/** Milliseconds from an ISO timestamp to `now`; null without a usable time (no timestamp, or the still frame's 0). */
+function ageOf(iso: string, now: number): number | null {
+  const t = Date.parse(iso)
+  return iso === '' || now === 0 || Number.isNaN(t) ? null : now - t
+}
+
+/** "2 小时前"; '' without a usable time or for a time ahead of `now`. */
+function relTime(iso: string, now: number): string {
+  const age = ageOf(iso, now)
+  if (age === null || age < 0) return ''
+  const min = Math.floor(age / 60_000)
+  if (min < 1) return '刚刚'
+  if (min < 60) return `${min} 分钟前`
+  const hours = Math.floor(min / 60)
+  return hours < 24 ? `${hours} 小时前` : `${Math.floor(hours / 24)} 天前`
+}
+
 function mileText(b: Board): string {
   if (!b.milestones.enabled) return ''
   const now = b.milestones.items.filter(m => m.status === '进行中')
@@ -174,7 +199,7 @@ function mileText(b: Board): string {
 // ---------- drawing ----------
 
 /** The one-line entry; pressing it does what /board does when the board is not on screen. */
-export function renderEntry(els: Els, vm: Pick<ViewModel, 'board' | 'stale'>, onOpen: () => Promise<void>): RenderElement {
+export function renderEntry(els: Els, vm: Pick<ViewModel, 'board' | 'stale' | 'local'>, onOpen: () => Promise<void>): RenderElement {
   const { Text, Button } = els
   return (
     <Button key="open-board" plain onPress={onOpen}>
@@ -206,7 +231,7 @@ export function renderBoard(els: Els, vm: ViewModel, actions: Actions, mode: Mod
     <Box flexDirection="column">
       {titleArea(c, b)}
       {mode === 'pane' && b.focus.mandate !== '' && <Text dimColor>{`授权：${clip(b.focus.mandate, 200)}`}</Text>}
-      {reviewItems(b, new Set(Object.keys(vm.stamps))).length > 0 && attention(c, b)}
+      {reviewItems(b, vm.local).length > 0 && attention(c, b)}
       {b.proposals.length > 0 && cards(c, b)}
       {total === 0 && <Text dimColor>还没有目标</Text>}
       {parts.active.slice(0, GOAL_LIMIT).map(g => goalBlock(c, g, false))}
@@ -271,7 +296,7 @@ function chip(c: Ctx, kind: ChipKind, counts: Counts): RenderElement {
 function titleArea(c: Ctx, b: Board): RenderElement {
   const { Box, Text } = c.els
   const { vm } = c
-  const counts = boardCounts(b)
+  const counts = boardCounts(b, vm.local)
   const bg = titleBg(vm.palette)
   const mile = mileText(b)
   const mascot =
@@ -322,82 +347,103 @@ function cards(c: Ctx, b: Board): RenderElement {
           </Box>
         </Box>
       ))}
+      <Text dimColor>也可以在对话里直接说</Text>
     </Box>
   )
 }
 
-/** The button of a review item; once pressed, the stamp that stands in for it until the write has landed. */
-function approveEl(c: Ctx, id: string, key: string): RenderElement {
-  const { Text, Button } = c.els
-  const at = c.vm.stamps[id]
-  if (at === undefined) return <Button key={key} label="验收通过" variant="primary" onPress={() => c.actions.approveItem(id)} />
-  const e = c.vm.motion ? c.vm.now - at : STAMP_MS
-  const green = greenText(c.vm)
-  if (e < 150) return <Text color={green} bold>▓▓▓▓</Text>
-  if (e < 320) {
-    const light = c.vm.palette === null ? undefined : hex(mix(c.vm.palette.base, statusGreen(c.vm.palette), 0.45))
-    return <Text color={green} bold {...(light === undefined ? {} : { backgroundColor: light })}>✓ 通过</Text>
-  }
-  const solid = c.vm.palette === null ? undefined : statusGreen(c.vm.palette)
-  return solid === undefined ? (
-    <Text color="inverseText" backgroundColor="success" bold>✓ 通过</Text>
-  ) : (
-    <Text color={hex(contrastFg(solid))} backgroundColor={hex(solid)} bold>✓ 通过</Text>
-  )
-}
+/** "目标短名 › 步骤短名", or the goal's alone for an item outside any step. */
+const whereOf = (goal: Goal, step: Step | undefined): string => `${goalShortName(goal.title)}${step === undefined ? '' : ` › ${stepShortName(step)}`}`
 
-/** Everything waiting for the user's acceptance in one place, whatever goal it sits in or how the view is cut. */
+/** Every review item the user has not looked at yet, in one place, whatever goal it sits in or how the view is cut. Only reminds and opens: the verdict is given in the conversation. */
 function attention(c: Ctx, b: Board): RenderElement {
-  const { Box, Text } = c.els
-  const all = reviewItems(b, new Set(Object.keys(c.vm.stamps)))
+  const { Box, Text, Button } = c.els
+  const all = reviewItems(b, c.vm.local)
   const shown = all.slice(0, ATTENTION_LIMIT)
   return (
     <Box flexDirection="column" borderStyle="round" paddingX={1}>
       <Text color={greenText(c.vm)} bold>
-        待你处理
+        待你看
       </Text>
       {shown.map(({ goal, step, item }) => {
-        const marked = item.links.filter(l => l.forReview)
-        const where = `${goalShortName(goal.title)}${step === undefined ? '' : ` › ${stepShortName(step)}`}`
+        const when = relTime(item.reportedAt, c.vm.now)
+        const hidden = new Set(hiddenLinks(c.vm.local, item.id, item.links))
+        const entries = item.links.map((l, n) => ({ l, n })).filter(({ l }) => l.forReview && !hidden.has(l))
         return (
           <Box flexDirection="column">
-            <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
+            <Box flexDirection="row" columnGap={1}>
               <Text color={greenText(c.vm)}>{STATUS_ICON.review}</Text>
-              <Text>{clip(item.title, 120)}</Text>
-              <Text dimColor>{`· ${where}`}</Text>
-              {approveEl(c, item.id, `todo-approve:${item.id}`)}
+              <Box flexGrow={1} flexShrink={1}>
+                <Text wrap="truncate-end">{clip(item.title, 120)}</Text>
+              </Box>
+              <Text dimColor wrap="truncate-end">{`· ${whereOf(goal, step)}`}</Text>
+              {when !== '' && <Text dimColor>{when}</Text>}
+              <Button key={`seen:${item.id}`} label="看过了" onPress={() => c.actions.markSeen(item.id)} />
             </Box>
             <Box flexDirection="column" paddingLeft={2}>
-              {marked.length === 0 && item.noReviewTargetReason !== '' && <Text dimColor>{`无验收入口：${clip(item.noReviewTargetReason, 200)}`}</Text>}
-              {marked.map((l, n) => linkRow(c, `todo-link:${item.id}:${n}`, l, '验收 '))}
+              {entries.length === 0 && item.noReviewTargetReason !== '' && <Text dimColor>{`无验收入口：${clip(item.noReviewTargetReason, 200)}`}</Text>}
+              {entries.map(({ l, n }) => linkRow(c, `todo-link:${item.id}:${n}`, l, '', item.id))}
             </Box>
           </Box>
         )
       })}
-      {all.length > shown.length && <Text dimColor>{`… 另有 ${all.length - shown.length} 项待验收，见下方目标`}</Text>}
+      {all.length > shown.length && <Text dimColor>{`… 另有 ${all.length - shown.length} 项待你看，见下方目标`}</Text>}
     </Box>
   )
 }
 
-/** The links attached to a goal or a step: listed under its title, or folded into one line when there are many. */
-function linksBlock(c: Ctx, ownerId: string, links: readonly Link[]): RenderElement {
+/**
+ * The links of a goal, a step or an item: those shown, listed or folded into "资料 N 条" when there are more than
+ * `inline`, then the ones this user hid, folded into "已隐藏 N 条". `title` heads the list when it is not folded.
+ */
+function linksBlock(c: Ctx, ownerId: string, links: readonly Link[], o: { inline: number; title: string; markReview: boolean }): RenderElement {
+  const { inline, title } = o
   const { Box, Text, Button } = c.els
-  const open = linksOpen(links, `links:${ownerId}`, c.vm.expanded)
-  const folded = links.length > GOAL_LINKS_INLINE
+  const rows = links.map((l, n) => ({ l, n }))
+  const hidden = new Set(hiddenLinks(c.vm.local, ownerId, links))
+  const vis = rows.filter(r => !hidden.has(r.l))
+  const visLinks = vis.map(r => r.l)
+  const open = linksOpen(visLinks, `links:${ownerId}`, c.vm.expanded, inline)
+  const folded = visLinks.length > inline
   return (
-    <Box flexDirection="column" paddingLeft={2}>
-      {folded ? (
-        <Button key={`links:${ownerId}`} plain onPress={() => c.actions.toggle(`links:${ownerId}`, !open)}>
-          <Text dimColor>{`${open ? '▾' : '▸'} 资料 ${links.length} 条`}</Text>
-        </Button>
-      ) : (
-        <Text dimColor>资料</Text>
-      )}
-      {open && (
-        <Box flexDirection="column" paddingLeft={2}>
-          {links.map((l, n) => linkRow(c, `link:${ownerId}:${n}`, l, ''))}
+    <Box flexDirection="column">
+      {vis.length > 0 &&
+        (folded ? (
+          <Button key={`links:${ownerId}`} plain onPress={() => c.actions.toggle(`links:${ownerId}`, !open)}>
+            <Text dimColor>{`${open ? '▾' : '▸'} 资料 ${vis.length} 条`}</Text>
+          </Button>
+        ) : (
+          title !== '' && <Text dimColor>{title}</Text>
+        ))}
+      {open && vis.length > 0 && (
+        <Box flexDirection="column" paddingLeft={folded || title !== '' ? 2 : 0}>
+          {vis.map(({ l, n }) => linkRow(c, `link:${ownerId}:${n}`, l, o.markReview && l.forReview ? '验收 ' : '', ownerId))}
         </Box>
       )}
+      {hidden.size > 0 && hiddenFold(c, ownerId, rows.filter(r => hidden.has(r.l)))}
+    </Box>
+  )
+}
+
+/** "▸ 已隐藏 N 条": the links this user hid under one owner; opened, each can be brought back. */
+function hiddenFold(c: Ctx, ownerId: string, rows: ReadonlyArray<{ l: Link; n: number }>): RenderElement {
+  const { Box, Text, Button } = c.els
+  const key = `hidden:${ownerId}`
+  const open = c.vm.expanded[key] === true
+  return (
+    <Box flexDirection="column">
+      <Button key={key} plain onPress={() => c.actions.toggle(key, !open)}>
+        <Text dimColor>{`${open ? '▾' : '▸'} 已隐藏 ${rows.length} 条`}</Text>
+      </Button>
+      {open &&
+        rows.map(({ l, n }) => (
+          <Box flexDirection="row" columnGap={1} paddingLeft={2}>
+            <Box flexGrow={1} flexShrink={1}>
+              <Text dimColor wrap="truncate-end">{linkName(l)}</Text>
+            </Box>
+            <Button key={`restore:${ownerId}:${n}`} label="恢复" onPress={() => c.actions.unhideLink(ownerId, l.target)} />
+          </Box>
+        ))}
     </Box>
   )
 }
@@ -480,10 +526,10 @@ function goalBlock(c: Ctx, g: Goal, muted: boolean): RenderElement {
             )}
           </Box>
           <Box flexDirection="column" paddingLeft={2}>
-            {open && g.links.length > 0 && linksBlock(c, g.id, g.links)}
+            {open && g.links.length > 0 && <Box paddingLeft={2}>{linksBlock(c, g.id, g.links, { inline: goalLinksInline(b, g), title: '资料', markReview: false })}</Box>}
             {!muted && stepped && stepStrip(c, g, open)}
             {open && (muted || !stepped) && itemsGroup(c, g.items, `done:${g.id}`)}
-            {open && !muted && stepped && unitsOf(g).filter(u => unitOpen(g, u, vm.expanded)).map(u => stepBlock(c, g, u))}
+            {open && !muted && stepped && unitsOf(g).filter(u => unitOpen(g, u, vm.expanded) && (u.items.length > 0 || (u.step?.links.length ?? 0) > 0)).map(u => stepBlock(c, g, u))}
           </Box>
       </Box>
     </Box>
@@ -535,7 +581,7 @@ function stepBlock(c: Ctx, g: Goal, u: Unit): RenderElement {
         <Text bold wrap="truncate-end">{`▾ ${step === null ? '其他' : clip(step.title, 80)}`}</Text>
         {step !== null && <Text dimColor>{` ${done}/${total}`}</Text>}
       </Button>
-      {step !== null && step.links.length > 0 && linksBlock(c, step.id, step.links)}
+      {step !== null && step.links.length > 0 && <Box paddingLeft={2}>{linksBlock(c, step.id, step.links, { inline: LINKS_INLINE, title: '资料', markReview: false })}</Box>}
       {itemsGroup(c, step === null ? looseItems(g) : u.items, step === null ? `done:${g.id}` : `done:${u.id}`)}
     </Box>
   )
@@ -545,13 +591,11 @@ function stepBlock(c: Ctx, g: Goal, u: Unit): RenderElement {
 function itemsGroup(c: Ctx, items: readonly Item[], foldKey: string): RenderElement {
   const { Box, Text, Button } = c.els
   const { vm } = c
-  const pinned = (i: Item): boolean => vm.stamps[i.id] !== undefined
-  const live = items.filter(i => (i.status !== 'done' && i.status !== 'dropped') || pinned(i))
-  const rank = (i: Item): number => (pinned(i) ? 0 : SHOW_ORDER.indexOf(i.status))
-  const all = live.map((i, n) => ({ i, n })).sort((x, y) => rank(x.i) - rank(y.i) || x.n - y.n).map(x => x.i)
+  const live = items.filter(i => i.status !== 'done' && i.status !== 'dropped')
+  const all = live.map((i, n) => ({ i, n })).sort((x, y) => SHOW_ORDER.indexOf(x.i.status) - SHOW_ORDER.indexOf(y.i.status) || x.n - y.n).map(x => x.i)
   const ordered = all.slice(0, c.budget.left)
   c.budget.left -= ordered.length
-  const done = items.filter(i => i.status === 'done' && !pinned(i))
+  const done = items.filter(i => i.status === 'done')
   const dropped = items.filter(i => i.status === 'dropped')
   const foldOpen = vm.expanded[foldKey] === true
   const foldText = [done.length > 0 ? `✓ 已完成 ${done.length} 项` : '', dropped.length > 0 ? `搁置 ${dropped.length} 项` : ''].filter(Boolean).join(' · ')
@@ -576,17 +620,16 @@ function itemsGroup(c: Ctx, items: readonly Item[], foldKey: string): RenderElem
   )
 }
 
-function subline(vm: ViewModel, it: Item): string {
-  const b = vm.board as Board
-  const parts: string[] = []
+/** The short marks at the end of an item row: owner, what it waits for, and for another session's running item when it last reported. */
+function rowTags(vm: ViewModel, it: Item): string[] {
+  const out: string[] = []
+  if (it.owner !== '') out.push(`@${it.owner}`)
+  if (it.waitingFor !== '') out.push(`等：${clip(it.waitingFor, WAIT_TAG)}`)
   if (it.status === 'running' && !isMine(it, vm)) {
-    parts.push(`上次报告在跑${it.reportedAt !== '' ? ` · ${shortTime(it.reportedAt)}` : ''} · 未核实`)
+    const age = ageOf(it.reportedAt, vm.now)
+    out.push(age !== null && age > STALE_RUN_MS ? '可能已停' : `别的会话${it.reportedAt !== '' ? ` · ${shortTime(it.reportedAt)}` : ''}`)
   }
-  if (it.waitingFor !== '') parts.push(`等：${clip(it.waitingFor, 120)}`)
-  const deps = dependsText(b, it)
-  if (deps !== '') parts.push(`依赖：${deps}`)
-  if (it.note !== '') parts.push(firstLine(it.note))
-  return parts.join(' · ')
+  return out
 }
 
 /** What the item still waits on: unfinished dependencies, two titles and a count. */
@@ -605,29 +648,26 @@ function itemRow(c: Ctx, it: Item): RenderElement {
   const { Box, Text, Button } = c.els
   const { vm } = c
   const open = itemOpen(it, vm.expanded)
-  const ic = iconColor(it, vm)
-  const sub = subline(vm, it)
+  // A review item this user has looked at stays in review until the AI moves it; it only steps back.
+  const seen = it.status === 'review' && !isWaiting(vm.local, it)
+  const ic = seen ? { dim: true } : iconColor(it, vm)
   const spin = it.status === 'running' ? spinner(c, `spin:${it.id}`, isMine(it, vm)) : null
-  const stamped = vm.stamps[it.id] !== undefined
+  const tags = [...rowTags(vm, it), ...(seen ? ['已看'] : [])]
   const rowBg = rippleBg(c, it.id, itemRipple(it.status))
   return (
     <Box flexDirection="column" {...(rowBg === undefined ? {} : { backgroundColor: rowBg })}>
-      <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
-        <Box flexDirection="row">
+      <Box flexDirection="row" columnGap={1}>
+        <Box flexDirection="row" flexGrow={1} flexShrink={1}>
           {spin}
           <Button key={`item:${it.id}`} plain onPress={() => c.actions.toggle(it.id, !open)}>
-            {spin === null && <Text color={ic.color} dimColor={ic.dim === true}>{STATUS_ICON[stamped ? 'review' : it.status]}</Text>}
-            <Text>{` ${clip(it.title, 120)}`}</Text>
-            {it.owner !== '' && <Text dimColor>{` @${it.owner}`}</Text>}
+            {spin === null && <Text color={ic.color} dimColor={ic.dim === true}>{seen ? '◇' : STATUS_ICON[it.status]}</Text>}
+            <Text dimColor={seen} wrap="truncate-end">{` ${clip(it.title, 120)}`}</Text>
           </Button>
         </Box>
-        {(it.status === 'review' || stamped) && approveEl(c, it.id, `approve:${it.id}`)}
+        {tags.map(t => (
+          <Text dimColor>{t}</Text>
+        ))}
       </Box>
-      {sub !== '' && (
-        <Box paddingLeft={2}>
-          <Text dimColor wrap="truncate-end">{sub}</Text>
-        </Box>
-      )}
       {open && details(c, it)}
     </Box>
   )
@@ -638,26 +678,59 @@ function linkName(l: Link): string {
   return `${l.kind} ${clip(base, 40)}${l.label !== '' ? ` · ${clip(l.label, 40)}` : ''}`
 }
 
-/** One link: its name and its buttons. `key` names the buttons, so two rows for one link need two keys. */
-function linkRow(c: Ctx, key: string, l: Link, prefix: string): RenderElement {
+/**
+ * One link. A file or a url opens from its name; a command or a ref has its copy button instead. The other buttons
+ * and [×] (hide on this machine) show under the pointer on a surface with hover, and stay on screen elsewhere, without
+ * VS Code. `key` names the buttons, so two rows for one link need two keys.
+ */
+function linkRow(c: Ctx, key: string, l: Link, prefix: string, ownerId: string): RenderElement {
   const { Box, Text, Button } = c.els
   const { vm } = c
   const acts = linkActions(l, vm.root, vm.platform, vm.hasCode, vm.home)
   const gone = l.type === 'path' && vm.missing.has(resolveTarget(l.target, vm.root, vm.home))
+  const name = `${prefix}${linkName(l)}${gone ? '（文件不存在）' : ''}`
+  const opener = acts.find(a => a.kind === 'open')
+  const btn = (a: LinkAction): RenderElement => (
+    <Button key={`${key}:${a.kind}`} label={vm.hover || a.kind !== 'copy' || l.type === 'command' ? a.label : '复制'} dimColor={gone && a.kind !== 'copy'} onPress={press => c.actions.link(a, press.surface)} />
+  )
+  // Without something to open, copying is what the link is for: that button never hides.
+  const fixed = opener === undefined ? acts.filter(a => a.kind === 'copy') : []
+  const extra = acts.filter(a => a !== opener && !fixed.includes(a) && (vm.hover || a.kind !== 'vscode'))
+  const hide = <Button key={`${key}:hide`} label="×" onPress={() => c.actions.hideLink(ownerId, l.target)} />
   return (
-    <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
-      <Text dimColor={gone} wrap="truncate-end">{`${prefix}${linkName(l)}${gone ? '（文件不存在）' : ''}`}</Text>
-      {acts.map(a => (
-        <Button key={`${key}:${a.kind}`} label={a.label} dimColor={gone && a.kind !== 'copy'} onPress={press => c.actions.link(a, press.surface)} />
-      ))}
+    <Box flexDirection="row" columnGap={1} {...(vm.hover ? { key: `lh:${key}` } : {})}>
+      <Box flexGrow={1} flexShrink={1}>
+        {opener === undefined ? (
+          <Text dimColor={gone} wrap="truncate-end">{name}</Text>
+        ) : (
+          <Button key={`${key}:open`} plain dimColor={gone} onPress={press => c.actions.link(opener, press.surface)}>
+            <Text dimColor={gone} wrap="truncate-end">{name}</Text>
+          </Button>
+        )}
+      </Box>
+      {fixed.map(btn)}
+      {vm.hover ? (
+        <Box position="absolute" right={0} top={0} display="none" hover={{ display: 'flex' }} columnGap={1}>
+          {extra.map(btn)}
+          {hide}
+        </Box>
+      ) : (
+        [...extra.map(btn), hide]
+      )}
     </Box>
   )
 }
 
+/** What an opened item shows: the full text of everything its row leaves out, then its links. */
 function details(c: Ctx, it: Item): RenderElement {
   const { Box, Text } = c.els
+  const b = c.vm.board as Board
   const lines: string[] = []
-  if (it.note.includes('\n') || it.note.length > 200) lines.push(clip(it.note, NOTE_LIMIT))
+  if (it.status === 'running' && !isMine(it, c.vm)) lines.push(`别的会话报告在跑${it.reportedAt !== '' ? ` · ${shortTime(it.reportedAt)}` : ''} · 未核实`)
+  if (it.waitingFor !== '') lines.push(`等：${clip(it.waitingFor, 200)}`)
+  const deps = dependsText(b, it)
+  if (deps !== '') lines.push(`依赖：${deps}`)
+  if (it.note !== '') lines.push(clip(it.note, NOTE_LIMIT))
   if (it.acceptance !== '') lines.push(`验收标准：${clip(it.acceptance, NOTE_LIMIT)}`)
   if (it.scope.length > 0) lines.push(`负责文件：${it.scope.slice(0, 6).join('、')}${it.scope.length > 6 ? ` 等 ${it.scope.length} 个` : ''}`)
   if (it.status === 'review' && it.noReviewTargetReason !== '' && !it.links.some(l => l.forReview)) lines.push(`无验收入口：${clip(it.noReviewTargetReason, 200)}`)
@@ -666,7 +739,7 @@ function details(c: Ctx, it: Item): RenderElement {
       {lines.map(t => (
         <Text dimColor>{t}</Text>
       ))}
-      {it.links.map((l, n) => linkRow(c, `link:${it.id}:${n}`, l, l.forReview ? '验收 ' : ''))}
+      {it.links.length > 0 && linksBlock(c, it.id, it.links, { inline: Number.POSITIVE_INFINITY, title: '', markReview: true })}
     </Box>
   )
 }
@@ -690,15 +763,7 @@ export function makeActions(host: Host, store: BoardStore, nowIso: () => Promise
       return false
     }
   }
-  const findItem = (b: Board, id: string): Item | undefined => b.goals.flatMap(g => g.items).find(i => i.id === id)
   return {
-    approveItem: id =>
-      run((b, ctx) => {
-        const it = findItem(b, id)
-        if (it === undefined) return { ok: false, index: 0, reason: `事项 ${id} 已不存在` }
-        if (it.status !== 'review') return { ok: false, index: 0, reason: `事项「${it.title}」已不在待验收状态` }
-        return applyOps(b, [{ op: 'item.update', id, status: 'done' }], ctx)
-      }),
     approveProposal: id => run((b, ctx) => approve(b, id, ctx, 'sidebar')).then(() => undefined),
     rejectProposal: id => run(b => reject(b, id)).then(() => undefined),
     focusGoal: goalId =>
