@@ -129,36 +129,36 @@ describe('prompt', () => {
 })
 
 describe('bookkeeping reminder', () => {
-  test('a turn that edited files but not the board leaves a reminder for the next user message', async () => {
+  test('a turn that only edited files owes nothing', async () => {
     const f = await make()
     await sections(f)
     await f.fire('agent_start')
     await f.fire('tool_call', { toolName: 'edit' })
+    await f.fire('tool_call', { toolName: 'write' })
     await f.fire('agent_end', { messages: [] })
-    const event = { messageType: 'user', prompt: 'next', systemPromptOptions: { sections: {} } }
-    const [res] = await f.fire('before_agent_start', event)
-    expect(res.message.content).toContain('看板未更新')
+    const [res] = await f.fire('before_agent_start', { messageType: 'user', prompt: 'next', systemPromptOptions: { sections: {} } })
+    expect(res).toBeUndefined()
   })
 
   test('a turn that also wrote the board owes nothing', async () => {
     const f = await make()
     await sections(f)
     await f.fire('agent_start')
-    await f.fire('tool_call', { toolName: 'write' })
+    await f.fire('tool_call', { toolName: 'subagent' })
     await f.call('board_update', { ops: [{ op: 'rule.add', text: '记了' }] })
     await f.fire('agent_end', { messages: [] })
     const [res] = await f.fire('before_agent_start', { messageType: 'user', prompt: 'next', systemPromptOptions: { sections: {} } })
     expect(res).toBeUndefined()
   })
 
-  test('spawning a sub-agent counts like editing', async () => {
+  test('spawning a sub-agent without writing the board leaves the reminder', async () => {
     const f = await make()
     await sections(f)
     await f.fire('agent_start')
     await f.fire('tool_call', { toolName: 'subagent' })
     await f.fire('agent_end', { messages: [] })
     const [res] = await f.fire('before_agent_start', { messageType: 'user', prompt: 'next', systemPromptOptions: { sections: {} } })
-    expect(res.message.content).toContain('派了 1 个 agent')
+    expect(res.message.content).toContain('上一轮派了 1 个 agent，看板未更新；如有进展请补记')
   })
 })
 

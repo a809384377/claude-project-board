@@ -33,7 +33,7 @@ const NOTICE_TYPE = 'project-board-notice'
 const COMMAND_TYPE = 'project-board'
 
 /** pi's own tool names, as the bookkeeping check counts them. */
-const PI_TOOLS: ToolNames = { edit: new Set(['edit', 'write']), agent: new Set(['subagent']) }
+const PI_TOOLS: ToolNames = { agent: new Set(['subagent']) }
 
 const SUBCOMMANDS = [
   { value: '决策', description: '生效中的决策' },

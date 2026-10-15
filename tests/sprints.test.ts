@@ -139,11 +139,11 @@ describe('briefTitle', () => {
 
 describe('sprint split in the rules text', () => {
   test('the system prompt rules and the board_update description both send sprint progress to PLAN.md', () => {
-    expect(RULES_TEXT).toContain('ai/sprints/active/')
-    expect(RULES_TEXT).toContain('sprint 内的执行进度只写该 sprint 的 PLAN.md')
-    expect(RULES_TEXT).toContain('新开 sprint 时提议建对应目标')
-    expect(RULES_TEXT).toContain('sprint 结束时提议关闭')
     const update = toolSpecs.find(t => t.name === 'board_update')?.description ?? ''
+    expect(update).toContain('ai/sprints/active/')
+    expect(update).toContain('新开 sprint 时提议建对应目标')
+    expect(update).toContain('sprint 结束时提议关闭')
+    expect(RULES_TEXT).not.toContain('sprint')
     expect(update).toContain('sprint 内的执行进度只写该 sprint 的 PLAN.md')
     expect(update).not.toContain('不写其他进度文件')
   })

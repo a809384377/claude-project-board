@@ -126,6 +126,7 @@ const turnStart = ($: any, id = 't1') => $.turn.start({ text: 'go', turnId: id }
 const turnComplete = ($: any, id = 't1', agentId?: string) =>
   $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: id, reason: 'answer', ...(agentId ? { agentId } : {}) } as never)
 const edit = ($: any, agentId?: string) => $.tool.call({ tool: 'Edit', file_path: 'a.ts', ...(agentId ? { agentId } : {}) } as never)
+const spawn = ($: any, agentId?: string) => $.tool.call({ tool: 'Agent', prompt: 'x', ...(agentId ? { agentId } : {}) } as never)
 const update = async ($: any, ops: unknown[], agentId?: string) => {
   const r = await $.tool.call({ tool: T('board_update'), ops, ...(agentId ? { agentId } : {}) } as never)
   return JSON.parse(r.result as string) as { ok: boolean; rev?: number; error?: string }
@@ -261,13 +262,13 @@ describe('snapshot quotas', () => {
     // 3 x 4 and 10 x 6 both fit in full
     expect(notes(mk(3, 4))).toBe(3 * 4 * 3)
     expect(mk(10, 6)).toContain('i-9-5 ◐在做 事项 i-9-5 — 备注文字很长')
-    // 20 x 6 does not: the first goals keep their notes, later ones are cut to titles
-    const bigger = mk(19, 6)
+    // 25 x 6 does not: the first goals keep their notes, later ones are cut to titles
+    const bigger = mk(25, 6)
     expect(bigger.length).toBeLessThanOrEqual(SNAPSHOT_LIMIT)
     expect(bigger).toContain('i-0-5 ◐在做 事项 i-0-5 — 备注文字很长')
     expect(notes(bigger)).toBeGreaterThan(0)
-    expect(notes(bigger)).toBeLessThan(20 * 6 * 3)
-    expect(bigger).toMatch(/- g-1\d 目标1\d：◐在做 6/)
+    expect(notes(bigger)).toBeLessThan(25 * 6 * 3)
+    expect(bigger).toMatch(/- g-2\d 目标2\d：◐在做 6/)
     // 40 x 10: the tail is a count
     const huge = mk(40, 10)
     expect(huge.length).toBeLessThanOrEqual(SNAPSHOT_LIMIT)
@@ -384,10 +385,10 @@ describe('untold changes ride on the next user submission', () => {
     mock.clock(on)
     await $.session.start(START)
     await sectionText($)
-    externalWrite(w, fileBoard(w, b => void b.notes.push({ id: 'n-5', title: '外部资料', text: '', group: '' })))
+    externalWrite(w, fileBoard(w, b => void b.rules.push({ id: 'r-5', text: '外部约定', group: '' })))
     expect(await update($, [{ op: 'item.add', goalId: 'g-car', title: '随后写入' }])).toMatchObject({ ok: true })
     const ctx = (await submit($)).context?.[0] ?? ''
-    expect(ctx).toContain('外部：新增资料「外部资料」')
+    expect(ctx).toContain('外部：新增约定「外部约定」')
     expect(ctx).not.toContain('随后写入')
   })
 
@@ -457,7 +458,7 @@ describe('Sync with a user write (store.commit as user)', () => {
 // ---------- end-of-turn check ----------
 
 describe('end-of-turn bookkeeping check', () => {
-  test('two main-session edits and no board write: stale, and the next submission carries the nudge', async ($, on) => {
+  test('editing files alone never makes the board stale', async ($, on) => {
     world(on, small())
     mock.clock(on)
     await $.session.start(START)
@@ -466,46 +467,58 @@ describe('end-of-turn bookkeeping check', () => {
     await edit($)
     await edit($)
     await turnComplete($)
+    expect(await stateOf($, 'stale')).toBe(false)
+    expect((await submit($)).context).toBe(undefined)
+  })
+
+  test('main-session agent spawns and no board write: stale, and the next submission carries the nudge', async ($, on) => {
+    world(on, small())
+    mock.clock(on)
+    await $.session.start(START)
+    await sectionText($)
+    await turnStart($)
+    await spawn($)
+    await spawn($)
+    await turnComplete($)
     expect(await stateOf($, 'stale')).toBe(true)
     const ctx = (await submit($)).context ?? []
-    expect(ctx).toEqual(['上一轮改了 2 次文件 / 派了 0 个 agent，看板未更新；如有进展请补记'])
+    expect(ctx).toEqual(['上一轮派了 2 个 agent，看板未更新；如有进展请补记'])
     expect((await submit($)).context).toBe(undefined)
     expect(await stateOf($, 'stale')).toBe(true)
   })
 
-  test("a sub-agent's edits do not count; its turn.complete does not decide", async ($, on) => {
+  test("a sub-agent's spawns do not count; its turn.complete does not decide", async ($, on) => {
     world(on, small())
     mock.clock(on)
     await $.session.start(START)
     await sectionText($)
     await turnStart($)
-    await edit($, 'agent-1')
-    await edit($, 'agent-1')
+    await spawn($, 'agent-1')
     await turnComplete($, 'ta', 'agent-1')
     await turnComplete($)
     expect(await stateOf($, 'stale')).toBe(false)
     await turnStart($, 't2')
-    await edit($)
+    await spawn($)
     await turnComplete($, 't2', 'agent-1')
     expect(await stateOf($, 'stale')).toBe(false)
     await turnComplete($, 't2')
     expect(await stateOf($, 'stale')).toBe(true)
   })
 
-  test('a board write in the turn means no nudge; the next write clears an earlier warning', async ($, on) => {
+  test('spawning agents and writing the board in the same turn means no nudge; the next write clears an earlier warning', async ($, on) => {
     world(on, small())
     mock.clock(on)
     await $.session.start(START)
     await sectionText($)
     await turnStart($)
-    await edit($)
+    await spawn($)
     await update($, [{ op: 'item.update', id: 'i-b', note: '记了' }])
     await turnComplete($)
     expect(await stateOf($, 'stale')).toBe(false)
     expect(await stateOf($, 'reminder')).toBe('')
 
     await turnStart($, 't2')
-    await edit($)
+    await spawn($)
     await turnComplete($, 't2')
     expect(await stateOf($, 'stale')).toBe(true)
     await update($, [{ op: 'item.update', id: 'i-b', note: '补记' }])
@@ -519,8 +532,7 @@ describe('end-of-turn bookkeeping check', () => {
     await $.session.start(START)
     await sectionText($)
     await turnStart($)
-    await $.tool.call({ tool: 'Agent', prompt: 'x' } as never)
-    await edit($)
+    await spawn($)
     await update($, [{ op: 'item.update', id: 'i-b', status: 'doing' }], 'agent-1')
     await turnComplete($, 'ta', 'agent-1')
     await turnComplete($)
@@ -530,12 +542,12 @@ describe('end-of-turn bookkeeping check', () => {
     expect((await submit($)).context?.[0]).toContain('子 agent')
     // the count starts over with the next turn
     await turnStart($, 't2')
-    await edit($)
+    await spawn($)
     await turnComplete($, 't2')
     expect(await stateOf($, 'stale')).toBe(true)
   })
 
-  test('spawning agents counts too; Bash and Read do not', async ($, on) => {
+  test('Bash, Read and Edit do not count as spawning agents', async ($, on) => {
     world(on, small())
     mock.clock(on)
     await $.session.start(START)
@@ -543,12 +555,9 @@ describe('end-of-turn bookkeeping check', () => {
     await turnStart($)
     await $.tool.call({ tool: 'Bash', command: 'ls' } as never)
     await $.tool.call({ tool: 'Read', file_path: 'a' } as never)
+    await edit($)
     await turnComplete($)
     expect(await stateOf($, 'stale')).toBe(false)
-    await turnStart($, 't2')
-    await $.tool.call({ tool: 'Agent', prompt: 'x' } as never)
-    await turnComplete($, 't2')
-    expect((await submit($)).context).toEqual(['上一轮改了 0 次文件 / 派了 1 个 agent，看板未更新；如有进展请补记'])
   })
 
   test('turn.start resets the counts', async ($, on) => {
@@ -557,7 +566,7 @@ describe('end-of-turn bookkeeping check', () => {
     await $.session.start(START)
     await sectionText($)
     await turnStart($)
-    await edit($)
+    await spawn($)
     await turnStart($, 't2')
     await turnComplete($, 't2')
     expect(await stateOf($, 'stale')).toBe(false)
@@ -567,18 +576,19 @@ describe('end-of-turn bookkeeping check', () => {
 // ---------- pure pieces ----------
 
 describe('pure pieces', () => {
-  test('TurnCounter verdict', () => {
+  test('TurnCounter verdict counts agent spawns only', () => {
     const c = new TurnCounter()
-    expect(c.verdict()).toEqual({ stale: false, edits: 0, agents: 0 })
+    expect(c.verdict()).toEqual({ stale: false, agents: 0 })
     c.count('Write', false)
     c.count('NotebookEdit', false)
-    c.count('Agent', false)
     c.count('Bash', false)
-    expect(c.verdict()).toEqual({ stale: true, edits: 2, agents: 1 })
+    expect(c.verdict()).toEqual({ stale: false, agents: 0 })
+    c.count('Agent', false)
+    expect(c.verdict()).toEqual({ stale: true, agents: 1 })
     c.count('', true)
     expect(c.verdict().stale).toBe(false)
     c.reset()
-    expect(c.verdict()).toEqual({ stale: false, edits: 0, agents: 0 })
+    expect(c.verdict()).toEqual({ stale: false, agents: 0 })
   })
 
   test('isUserSubmission', () => {
@@ -606,6 +616,33 @@ describe('pure pieces', () => {
     expect(lines).toContain('用户：记录决策「路灯先不做」（用户定）')
     expect(lines.some(l => l.includes('关注改为「换个关注」'))).toBe(true)
     expect(describeChanges(before, before, '外部')).toEqual([])
+  })
+
+  test('describeChanges drops what does not change the AI judgement and keeps what does', () => {
+    const before = small()
+    const after = structuredClone(before)
+    const it = after.goals[0]!.items[0]!
+    it.title = '改名了'
+    it.note = '备注'
+    it.owner = '谁'
+    it.waitingFor = '等谁'
+    it.acceptance = '标准'
+    it.links.push({ type: 'path', target: 'a.md', kind: '', label: '', forReview: true, step: 0 } as never)
+    after.goals[0]!.outcome = '新成果'
+    after.goals[0]!.links.push({ type: 'path', target: 'g.md', kind: '', label: '', forReview: false, step: 0 } as never)
+    after.rules[0]!.text = '约定改了'
+    after.notes.push({ id: 'n-1', title: '资料', text: 'x', group: '' } as never)
+    after.milestones.enabled = !after.milestones.enabled
+    expect(describeChanges(before, after, '外部')).toEqual([])
+    after.rules.push({ id: 'r-2', text: '新约定', group: '' } as never)
+    after.goals[0]!.status = 'paused'
+    after.decisions[0]!.status = 'superseded'
+    after.goals[0]!.items.push(item('i-new', { title: '新事项' }))
+    const lines = describeChanges(before, after, '外部')
+    expect(lines).toContain('外部：新增约定「新约定」')
+    expect(lines).toContain('外部：目标「车辆」已暂停')
+    expect(lines.some(l => l.includes('新增事项「新事项」'))).toBe(true)
+    expect(lines.some(l => l.includes('已被替代'))).toBe(true)
   })
 
   test('closing a goal is one line, not one per item', () => {

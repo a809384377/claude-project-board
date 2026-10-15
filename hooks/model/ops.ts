@@ -557,5 +557,28 @@ export function applyOps(board: Board, ops: Op[], ctx: OpCtx): ApplyResult {
     }
   }
   if (ops.length === 0) return { ok: true, board: work, events: [] }
-  return finish(work, env.events, ops.length - 1)
+  const done = finish(work, env.events, ops.length - 1)
+  if (done.ok) done.events.push(...reviewHints(board, work))
+  return done
+}
+
+/** Hints for review entry points, from comparing the board before and after one batch. */
+function reviewHints(before: Board, after: Board): BoardEvent[] {
+  const old = new Map<string, Item>()
+  for (const g of before.goals) for (const i of g.items) old.set(i.id, i)
+  const out: BoardEvent[] = []
+  for (const g of after.goals) {
+    for (const i of g.items) {
+      const prev = old.get(i.id)
+      const entries = i.links.filter(l => l.forReview)
+      if (i.status === 'review' && prev?.status !== 'review' && entries.length === 0) {
+        out.push({ kind: 'hint', id: i.id, summary: `事项「${clip(i.title)}」没有验收入口，用户无法从看板打开它` })
+      }
+      const was = prev?.links.filter(l => l.forReview) ?? []
+      if (was.length > 0 && entries.some(l => !was.some(w => w.target === l.target))) {
+        out.push({ kind: 'hint', id: i.id, summary: `事项「${clip(i.title)}」已有入口：${was.map(l => l.target).join('、')}；不再需要的用 item.link.remove 移除` })
+      }
+    }
+  }
+  return out
 }

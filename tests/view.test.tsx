@@ -248,11 +248,11 @@ const pane = ($: any, surface: (typeof SURFACES)[number], viewport = LANDSCAPE):
 const texts = async (ui: any, re: RegExp): Promise<string[]> => (await ui.findAll({ type: 'Text', text: re })).map((t: { text: string }) => t.text)
 const keys = async (ui: any, prefix: string): Promise<string[]> =>
   (await ui.findAll({ type: 'Button' })).map((b: { key: string }) => b.key).filter((k: string) => k.startsWith(prefix))
-/** Two edits and no board write in a main-session turn leaves the board stale. */
+/** Two agent spawns and no board write in a main-session turn leaves the board stale. */
 async function makeStale($: any): Promise<void> {
   await $.turn.start({ text: 'go', turnId: 't1' } as never)
-  await $.tool.call({ tool: 'Edit', file_path: 'a.ts' } as never)
-  await $.tool.call({ tool: 'Edit', file_path: 'b.ts' } as never)
+  await $.tool.call({ tool: 'Agent', prompt: 'a' } as never)
+  await $.tool.call({ tool: 'Agent', prompt: 'b' } as never)
   await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as never)
 }
 const submit = ($: any) => $.prompt.submit({ text: 'hi', wait: false, origin: { kind: 'composer' } } as never) as Promise<{ context?: readonly string[] }>

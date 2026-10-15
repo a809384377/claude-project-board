@@ -28,9 +28,9 @@ const LINK_SHAPE = '{type: "path"|"url"|"command"|"ref", target, kind?, label?, 
 const UPDATE_DESCRIPTION = `项目看板（ai/board.json）的记录工具：一批操作要么全部生效，要么全不生效。
 
 工作规则：
-1. 项目状态记在看板，用看板工具读写。有进行中的 sprint（ai/sprints/active/）时，sprint 内的执行进度只写该 sprint 的 PLAN.md；看板上用它对应的目标记目标级状态、待验收节点和决策。
-2. 推进时随手更新事项；用户在对话里拍板时立即用 decision.add 记录（kind=user，附原话 quote）；你自己替用户做的非关键判断记 kind=delegated；用户改口时新增决策并用 supersedes 指向旧的。长期有效的约束同时用 rule.add 写进约定。
-3. 事项进入 review（待验收）必须有验收入口：该事项至少一条 forReview=true 的关联（item.link.add 或 item.add 的 links），或填写 noReviewTargetReason 说明为什么没有可看的东西。
+1. 项目状态记在看板，用看板工具读写。有进行中的 sprint（ai/sprints/active/）时，sprint 内的执行进度只写该 sprint 的 PLAN.md；看板上用它对应的目标记目标级状态、待验收节点和决策。新开 sprint 时提议建对应目标并挂 PLAN.md，sprint 结束时提议关闭。
+2. 推进时随手更新事项；用户在对话里拍板时立即用 decision.add 记录（kind=user，附原话 quote）；用户改口时新增决策并用 supersedes 指向旧的。长期有效的约束同时用 rule.add 写进约定。事项标题不超过约 25 字，过程细节写进 note。
+3. 事项进入 review（待用户过目）时挂上验收入口（forReview 关联），让用户能从看板直接打开。用户在对话里给出验收结论后，在同一次 board_update 里更新该事项状态（done，或回到 doing / 拆出修改事项）并移除不再需要的入口。
 4. 目标与关注的变化先用 board_propose 提议；用户对一个具体方案明确说了同意（如「同意合并」「就按这个建」）才加 userConfirmed 与原话直接执行。用户只是提出整理、拆分、合并、新建之类的要求不算同意，先提议，等用户回应。
 5. 目标是用户确认过的一件完整的事；为达成它的成果（outcome）而做的阶段，用 step.add 拆成步骤（如 A→B→C→D），事项用 stepId 挂到步骤上。步骤由你自己拆分、增删，不需要提议；成果之外的新事情，提议新目标。只有几件事的目标可以不拆步骤。sprint 对应的目标（挂着 PLAN.md 的）不拆步骤、不参与合并，步骤记在 PLAN.md。看板上几个目标其实是同一件事的不同阶段时，用 board_propose goal.merge 提议合并成一个目标。
 
@@ -55,7 +55,7 @@ link = ${LINK_SHAPE}
 - step.add 返回的步骤 id 在结果 events 里；同一批操作里新建的步骤，id 要等返回后才能用，所以「建步骤」与「挂事项」分两次调用。
 - 操作（ops 里的每一项）出现未声明的字段会报错；传 id 的操作必须用已存在的 id。dependsOn 里的 id 必须是活动区里已有的事项；事项被删除或随目标关闭时，别的事项对它的依赖自动解除，结果 events 里有记录。
 - 规则检查针对批量执行后的整个看板（不只是本批改到的事项），失败时返回第一条失败操作的序号 index 与原因 error，文件保持不变；按原因修正后整批重发。
-- 成功时返回新 rev 与 events（含新建对象的 id）。`
+- 成功时返回新 rev 与 events（含新建对象的 id）；kind=hint 的 event 是提示，不影响写入。`
 
 const GET_DESCRIPTION = `读取项目看板。scope：
 - summary：关注、里程碑、各目标及其步骤（含各步骤的完成数/总数、在跑数、待验收数）、未完成事项、待确认提议、各类条数（先看这个）

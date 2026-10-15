@@ -28,14 +28,6 @@ export function checkInvariants(board: Board): string | null {
   ]
   for (const x of others) if (dup(x.id)) return `id 重复：${x.id}`
 
-  for (const g of board.goals) {
-    for (const i of g.items) {
-      if (i.status === 'review' && !i.links.some(l => l.forReview) && i.noReviewTargetReason.trim() === '') {
-        return `事项 ${i.id}「${i.title}」处于待验收，但没有验收入口：加一条 forReview 关联（item.link.add），或填写 noReviewTargetReason`
-      }
-    }
-  }
-
   const fg = board.focus.goalId
   if (fg !== '' && !board.goals.some(g => g.id === fg)) return `当前关注指向的目标 ${fg} 不在活动区`
   return null

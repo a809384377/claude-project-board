@@ -89,11 +89,7 @@ export function describeChanges(before: Board, after: Board, actor: string): str
       if (!merges.has(id)) say(`新增目标「${clip(g.title)}」`)
     } else {
       if (old.title !== g.title) say(`目标「${clip(old.title)}」改名为「${clip(g.title)}」`)
-      if (old.outcome !== g.outcome) say(`目标「${clip(g.title)}」的成果改为「${clip(g.outcome, 40)}」`)
       if (old.status !== g.status) say(`目标「${clip(g.title)}」${g.status === 'paused' ? '已暂停' : '已恢复'}`)
-      const gain = g.links.filter(l => !old.links.some(o => o.target === l.target)).length
-      const lose = old.links.filter(o => !g.links.some(l => l.target === o.target)).length
-      if (gain > 0 || lose > 0) say(`目标「${clip(g.title)}」的关联 +${gain} -${lose}`)
     }
   }
   for (const [id, g] of bg) {
@@ -112,20 +108,8 @@ export function describeChanges(before: Board, after: Board, actor: string): str
     }
     const o = old.item
     const n = now.item
-    if (o.title !== n.title) say(`事项「${clip(o.title)}」改名为「${clip(n.title)}」`)
     if (o.status !== n.status) say(`${name}：${zh(o.status)} → ${zh(n.status)}${n.status === 'done' && n.doneBy ? `（${n.doneBy === 'user' ? '用户验收' : 'AI 验收'}）` : ''}`)
     if (old.goal.id !== now.goal.id && absorbed.get(old.goal.id) !== now.goal.id) say(`${name}移到目标「${clip(now.goal.title)}」`)
-    if (o.stepId !== n.stepId && !(absorbed.get(old.goal.id) === now.goal.id)) {
-      const st = now.goal.steps.find(x => x.id === n.stepId)
-      say(st ? `${name}移到步骤「${clip(st.title)}」` : `${name}移出步骤「${clip(old.goal.steps.find(x => x.id === o.stepId)?.title ?? '')}」`)
-    }
-    if (o.owner !== n.owner) say(`${name}的负责人：${o.owner || '无'} → ${n.owner || '无'}`)
-    if (o.note !== n.note) say(`${name}的备注改为「${clip(n.note, 40)}」`)
-    if (o.waitingFor !== n.waitingFor) say(`${name}的等待事项改为「${clip(n.waitingFor, 40)}」`)
-    if (o.acceptance !== n.acceptance) say(`${name}的验收标准有修改`)
-    const gain = n.links.filter(l => !o.links.some(x => x.target === l.target)).length
-    const lose = o.links.filter(x => !n.links.some(l => l.target === x.target)).length
-    if (gain > 0 || lose > 0) say(`${name}的关联 +${gain} -${lose}`)
   }
   for (const [id, old] of bi) {
     if (!ai.has(id) && !newlyArchived.has(old.goal.id)) say(`事项「${clip(old.item.title)}」已删除`)
@@ -135,21 +119,9 @@ export function describeChanges(before: Board, after: Board, actor: string): str
   const bs = stepsOf(before.goals)
   const as = stepsOf(after.goals)
   for (const [id, now] of as) {
-    const old = bs.get(id)
+    if (bs.has(id)) continue
     const n = now.step
-    const name = `步骤「${clip(n.title)}」`
-    if (!old) {
-      if (!merges.has(now.goal.id)) say(`新增${name}（目标：${clip(now.goal.title)}）`)
-      continue
-    }
-    const o = old.step
-    if (o.title !== n.title) say(`步骤「${clip(o.title)}」改名为「${clip(n.title)}」`)
-    if (o.label !== n.label) say(`${name}的短名改为「${clip(n.label)}」`)
-    if (o.note !== n.note && !merges.has(now.goal.id)) say(`${name}的说明改为「${clip(n.note, 40)}」`)
-    if (old.goal.id !== now.goal.id && absorbed.get(old.goal.id) !== now.goal.id) say(`${name}移到目标「${clip(now.goal.title)}」`)
-    const gain = n.links.filter(l => !o.links.some(x => x.target === l.target)).length
-    const lose = o.links.filter(x => !n.links.some(l => l.target === x.target)).length
-    if (gain > 0 || lose > 0) say(`${name}的关联 +${gain} -${lose}`)
+    if (!merges.has(now.goal.id)) say(`新增步骤「${clip(n.title)}」（目标：${clip(now.goal.title)}）`)
   }
   for (const [id, old] of bs) {
     if (!as.has(id) && !newlyArchived.has(old.goal.id) && !absorbed.has(old.goal.id)) say(`步骤「${clip(old.step.title)}」已删除`)
@@ -161,44 +133,15 @@ export function describeChanges(before: Board, after: Board, actor: string): str
     const old = bd.get(d.id)
     if (!old) say(`记录决策「${clip(d.text, 40)}」（${d.kind === 'user' ? '用户定' : 'AI 代做'}）`)
     else if (old.status !== d.status) say(`决策「${clip(d.text, 40)}」${d.status === 'superseded' ? '已被替代' : '恢复生效'}`)
-    else if (old.text !== d.text) say(`决策改为「${clip(d.text, 40)}」`)
   }
 
-  // 约定、资料
+  // 约定
   const br = byId(before.rules)
   for (const r of after.rules) {
-    const old = br.get(r.id)
-    if (!old) say(`新增约定「${clip(r.text, 40)}」`)
-    else if (old.text !== r.text || old.group !== r.group) say(`约定改为「${clip(r.text, 40)}」`)
+    if (!br.has(r.id)) say(`新增约定「${clip(r.text, 40)}」`)
   }
   const ar = byId(after.rules)
   for (const r of before.rules) if (!ar.has(r.id)) say(`删除约定「${clip(r.text, 40)}」`)
-
-  const bn = byId(before.notes)
-  for (const n of after.notes) {
-    const old = bn.get(n.id)
-    if (!old) say(`新增资料「${clip(n.title)}」`)
-    else if (old.title !== n.title || old.text !== n.text || old.group !== n.group) say(`资料「${clip(n.title)}」有修改`)
-  }
-  const an = byId(after.notes)
-  for (const n of before.notes) if (!an.has(n.id)) say(`删除资料「${clip(n.title)}」`)
-
-  // 里程碑
-  if (before.milestones.enabled !== after.milestones.enabled) say(`里程碑${after.milestones.enabled ? '已启用' : '已停用'}`)
-  const bm = byId(before.milestones.items)
-  for (const m of after.milestones.items) {
-    const old = bm.get(m.id)
-    if (!old) say(`新增里程碑「${clip(m.title)}」`)
-    else {
-      if (old.status !== m.status) say(`里程碑「${clip(m.title)}」：${old.status} → ${m.status}`)
-      if (m.gates.length > old.gates.length) {
-        const g = m.gates[m.gates.length - 1]
-        if (g) say(`里程碑「${clip(m.title)}」新增关卡「${clip(g.name)}」：${g.result}`)
-      }
-    }
-  }
-  const am = byId(after.milestones.items)
-  for (const m of before.milestones.items) if (!am.has(m.id)) say(`删除里程碑「${clip(m.title)}」`)
 
   // 待确认提议
   const bp = byId(before.proposals)

@@ -7,13 +7,7 @@ export const FIELD_LIMIT = 300
 const CUT_NOTE = '…（board_get 查看全文）'
 
 export const RULES_TEXT = `# 项目看板（ai/board.json，project-board 维护）
-工作规则：
-1. 项目状态记在看板，用看板工具（board_get / board_update / board_propose）读写。有进行中的 sprint（ai/sprints/active/）时，sprint 内的执行进度只写该 sprint 的 PLAN.md；看板上用它对应的目标记目标级状态、待验收节点和决策。新开 sprint 时提议建对应目标并挂 PLAN.md，sprint 结束时提议关闭。
-2. 推进时随手更新事项；用户在对话里拍板时立即用 decision.add 记录（kind=user，附原话）；你自己替用户做的非关键判断记 kind=delegated；用户改口时新增决策并用 supersedes 指向旧的。长期有效的约束同时用 rule.add 写进约定。
-3. 事项进入 review（待验收）必须附验收入口（forReview 关联）。
-4. 目标与关注的变化先用 board_propose 提议；用户对一个具体方案明确说了同意（如「同意合并」「就按这个建」）才加 userConfirmed 与原话直接执行。用户只是提出整理、拆分、合并、新建之类的要求不算同意，先提议，等用户回应。
-5. 目标是用户确认过的一件完整的事；为达成它的成果（outcome）而做的阶段，用 step.add 拆成步骤（如 A→B→C→D），事项用 stepId 挂到步骤上。步骤由你自己拆分、增删，不需要提议；成果之外的新事情，提议新目标。只有几件事的目标可以不拆步骤。sprint 对应的目标（挂着 PLAN.md 的）不拆步骤、不参与合并，步骤记在 PLAN.md。看板上几个目标其实是同一件事的不同阶段时，用 board_propose goal.merge 提议合并成一个目标。
-以下是会话开始时的看板快照；之后的变化会在用户发消息时另行告知，需要最新内容用 board_get。`
+以下是会话开始时的看板快照；之后的变化随用户消息告知，最新内容用 board_get。`
 
 const STATUS_ICON: Record<string, string> = {
   todo: '○待办',

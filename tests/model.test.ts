@@ -160,40 +160,73 @@ describe('ops: batches are all-or-nothing', () => {
 })
 
 describe('ops: invariants on the final state', () => {
-  test('review without entry or reason fails', () => {
-    const r = applyOps(base(), [{ op: 'item.update', id: 'i-a', status: 'review' }], ctx())
-    expect(r).toMatchObject({ ok: false, index: 0 })
-    expect((r as { reason: string }).reason).toContain('验收入口')
+  test('review without entry succeeds and carries a hint naming the item', () => {
+    const r = must(applyOps(base(), [{ op: 'item.update', id: 'i-a', status: 'review' }], ctx()))
+    expect(r.board.goals[0]!.items[0]!.status).toBe('review')
+    const hints = r.events.filter(e => e.kind === 'hint')
+    expect(hints).toHaveLength(1)
+    expect(hints[0]).toMatchObject({ id: 'i-a' })
+    expect(hints[0]!.summary).toContain('没有验收入口，用户无法从看板打开它')
   })
 
-  test('review with entry, or with noReviewTargetReason, passes; order inside batch does not matter', () => {
-    must(applyOps(base(), [{ op: 'item.update', id: 'i-a', status: 'review', noReviewTargetReason: '纯口头确认' }], ctx()))
-    must(applyOps(base(), [
+  test('review with an entry, in either order inside the batch, carries no hint', () => {
+    const r1 = must(applyOps(base(), [
       { op: 'item.update', id: 'i-a', status: 'review' },
       { op: 'item.link.add', id: 'i-a', link: fileLink },
     ], ctx()))
+    expect(r1.events.filter(e => e.kind === 'hint')).toEqual([])
+    const r2 = must(applyOps(base(), [
+      { op: 'item.link.add', id: 'i-a', link: fileLink },
+      { op: 'item.update', id: 'i-a', status: 'review' },
+    ], ctx()))
+    expect(r2.events.filter(e => e.kind === 'hint')).toEqual([])
   })
 
   test('a link that is not forReview does not count as an entry', () => {
-    const r = applyOps(base(), [
+    const r = must(applyOps(base(), [
       { op: 'item.link.add', id: 'i-a', link: { type: 'ref', target: 'abc123', forReview: false } },
       { op: 'item.update', id: 'i-a', status: 'review' },
-    ], ctx())
-    expect(r.ok).toBe(false)
+    ], ctx()))
+    expect(r.events.filter(e => e.kind === 'hint')).toHaveLength(1)
   })
 
-  test('removing the last entry of a review item in the same batch fails', () => {
+  test('an item that was already in review is not hinted again by an unrelated edit', () => {
+    const inReview = apply(base(), [{ op: 'item.update', id: 'i-a', status: 'review' }])
+    const r = must(applyOps(inReview, [{ op: 'item.update', id: 'i-a', note: 'x' }], ctx()))
+    expect(r.events.filter(e => e.kind === 'hint')).toEqual([])
+  })
+
+  test('removing the last entry of a review item is allowed and hints', () => {
     const inReview = apply(base(), [
       { op: 'item.link.add', id: 'i-a', link: fileLink },
       { op: 'item.update', id: 'i-a', status: 'review' },
     ])
-    const r = applyOps(inReview, [{ op: 'item.link.remove', id: 'i-a', target: 'ai/r.md' }], ctx())
-    expect(r).toMatchObject({ ok: false, index: 0 })
-    // entry present -> a batch that swaps the entry is fine
-    must(applyOps(inReview, [
+    const r = must(applyOps(inReview, [{ op: 'item.link.remove', id: 'i-a', target: 'ai/r.md' }], ctx()))
+    expect(r.board.goals[0]!.items[0]!.links).toEqual([])
+  })
+
+  test('adding a forReview entry to an item that has one hints with the old entries; the first entry does not', () => {
+    const first = must(applyOps(base(), [{ op: 'item.link.add', id: 'i-a', link: fileLink }], ctx()))
+    expect(first.events.filter(e => e.kind === 'hint')).toEqual([])
+    const second = must(applyOps(first.board, [
+      { op: 'item.link.add', id: 'i-a', link: { ...fileLink, target: 'ai/r2.md' } },
+    ], ctx()))
+    const hints = second.events.filter(e => e.kind === 'hint')
+    expect(hints).toHaveLength(1)
+    expect(hints[0]).toMatchObject({ id: 'i-a' })
+    expect(hints[0]!.summary).toContain('已有入口：ai/r.md')
+    expect(hints[0]!.summary).toContain('item.link.remove')
+  })
+
+  test('swapping an entry in one batch hints; a plain (non-review) link added beside an entry does not', () => {
+    const b = apply(base(), [{ op: 'item.link.add', id: 'i-a', link: fileLink }])
+    const swap = must(applyOps(b, [
       { op: 'item.link.add', id: 'i-a', link: { ...fileLink, target: 'ai/r2.md' } },
       { op: 'item.link.remove', id: 'i-a', target: 'ai/r.md' },
     ], ctx()))
+    expect(swap.events.filter(e => e.kind === 'hint')).toHaveLength(1)
+    const plain = must(applyOps(b, [{ op: 'item.link.add', id: 'i-a', link: { type: 'ref', target: 'abc123', forReview: false } }], ctx()))
+    expect(plain.events.filter(e => e.kind === 'hint')).toEqual([])
   })
 
   test('dependsOn must point to an existing active item', () => {

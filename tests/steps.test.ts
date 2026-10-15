@@ -444,30 +444,22 @@ describe('describeChanges', () => {
     expect(lines).toContain('外部：目标「T 测试版」已从看板移除')
   })
 
-  test('step added, renamed, noted and removed are named; moving items between steps is one line', () => {
+  test('steps: added and removed are named; renames, notes, short names and moving items between steps are not', () => {
     const b0 = stepped()
     const sa = goalOf(b0, 'g-s').steps[0]!
-    const sb = goalOf(b0, 'g-s').steps[1]!
     const b5 = goalOf(b0, 'g-s').items.find(i => i.title.startsWith('B5'))!
     const b1 = apply(b0, [
       { op: 'step.add', goalId: 'g-s', title: 'D 新的' },
-      { op: 'step.update', id: sa.id, title: 'A 改名了', note: '新说明' },
+      { op: 'step.update', id: sa.id, title: 'A 改名了', label: '短', note: '新说明' },
       { op: 'item.update', id: b5.id, stepId: sa.id },
       { op: 'step.remove', id: goalOf(b0, 'g-s').steps[2]!.id },
     ])
-    const lines = describeChanges(b0, b1, '主会话')
-    expect(lines).toContain('主会话：新增步骤「D 新的」（目标：G 大目标）')
-    expect(lines).toContain('主会话：步骤「A 先做这个」改名为「A 改名了」')
-    expect(lines).toContain('主会话：步骤「A 改名了」的说明改为「新说明」')
-    expect(lines).toContain(`主会话：事项「B5 收进详情」移到步骤「A 改名了」`)
-    expect(lines).toContain('主会话：步骤「C 收尾」已删除')
-    expect(lines.some(l => l.includes('C1') && l.includes('移出步骤'))).toBe(true)
+    expect(describeChanges(b0, b1, '主会话')).toEqual(['主会话：新增步骤「D 新的」（目标：G 大目标）', '主会话：步骤「C 收尾」已删除'])
     const b2 = apply(b1, [{ op: 'item.update', id: b5.id, stepId: '' }])
-    expect(describeChanges(b1, b2, 'x')).toEqual(['x：事项「B5 收进详情」移出步骤「A 改名了」'])
-    expect(sb.id).toMatch(/^s-/)
+    expect(describeChanges(b1, b2, 'x')).toEqual([])
   })
 
-  test('a step carried to another goal by id is one "移到目标" line, not a delete plus an add', () => {
+  test('a step carried to another goal by id says nothing: it is neither a delete nor an add', () => {
     const before = stepped()
     before.goals.push(mkGoal('g-o', '别的'))
     const after = JSON.parse(JSON.stringify(before)) as Board
@@ -475,8 +467,7 @@ describe('describeChanges', () => {
     after.goals[0]!.items = after.goals[0]!.items.map(i => (i.stepId === s.id ? { ...i, stepId: '' } : i))
     after.goals[1]!.steps.push(s)
     const lines = describeChanges(before, after, '外部')
-    expect(lines).toContain('外部：步骤「A 先做这个」移到目标「别的」')
-    expect(lines.some(l => l.includes('已删除') || l.startsWith('外部：新增步骤'))).toBe(false)
+    expect(lines.some(l => l.includes('已删除') || l.includes('新增步骤') || l.includes('步骤「A 先做这个」'))).toBe(false)
   })
 })
 
@@ -578,14 +569,14 @@ describe('snapshot with steps', () => {
   }
 
   test('a big stepped goal degrades step by step: early steps keep notes, later ones titles, then counts; heads and the bar stay', () => {
-    const t = buildSnapshot(big(12, 8))
+    const t = buildSnapshot(big(15, 8))
     expect(t.length).toBeLessThanOrEqual(SNAPSHOT_LIMIT)
     expect(t).toContain('总体成果')
-    expect(t).toMatch(/步骤：.*S11/)
+    expect(t).toMatch(/步骤：.*S14/)
     expect(t).toContain('S0-0 事项 — 备注文字很长')
     const notes = t.split('备注文字很长').length - 1
     expect(notes).toBeGreaterThan(0)
-    expect(notes).toBeLessThan(12 * 8 * 5)
+    expect(notes).toBeLessThan(15 * 8 * 5)
     // somewhere a step is cut to its item titles
     expect(t).toMatch(/\n {4}- i-\w+ ◐在做 S\d+-\d+ 事项\n/)
   })
@@ -623,9 +614,6 @@ describe('snapshot with steps', () => {
   })
 
   test('rules text and tool descriptions know steps, goal.merge and the stepId rule', () => {
-    expect(RULES_TEXT).toContain('用 step.add 拆成步骤')
-    expect(RULES_TEXT).toContain('goal.merge')
-    expect(RULES_TEXT).toContain('不拆步骤、不参与合并')
     const spec = (n: string) => toolSpecs.find(t => t.name === n)!
     const update = spec('board_update').description
     for (const w of ['step.add', 'step.update', 'step.remove', 'step.link.add', 'stepId', '分两次调用', '与看板步骤无关', '用 step.add 拆成步骤']) expect(update).toContain(w)

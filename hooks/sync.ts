@@ -5,10 +5,10 @@ import type { BoardStore, Change } from './store'
 
 export const UNTOLD_LIMIT = 1500
 
-/** Which tool names count as editing files and as spawning agents; each host names its tools differently. */
-export type ToolNames = { edit: ReadonlySet<string>; agent: ReadonlySet<string> }
+/** Which tool names count as spawning agents; each host names its tools differently. */
+export type ToolNames = { agent: ReadonlySet<string> }
 
-export const CLAUDE_TOOLS: ToolNames = { edit: new Set(['Edit', 'Write', 'NotebookEdit']), agent: new Set(['Agent']) }
+export const CLAUDE_TOOLS: ToolNames = { agent: new Set(['Agent']) }
 
 /** What a user submission looks like: not sent into a running turn, and typed by a person or the SDK host. */
 export function isUserSubmission(e: { turnId?: string | undefined; origin: { kind: string } }): boolean {
@@ -24,23 +24,20 @@ export function formatUntold(lines: readonly string[]): string {
 
 /** Counts what the main session did in one turn. */
 export class TurnCounter {
-  private edits = 0
   private agents = 0
   private board = 0
   constructor(private readonly names: ToolNames = CLAUDE_TOOLS) {}
   reset(): void {
-    this.edits = 0
     this.agents = 0
     this.board = 0
   }
   /** `isBoardWrite` marks a successful board write; any other call is classified by tool name. */
   count(toolName: string, isBoardWrite: boolean): void {
     if (isBoardWrite) this.board++
-    else if (this.names.edit.has(toolName)) this.edits++
     else if (this.names.agent.has(toolName)) this.agents++
   }
-  verdict(): { stale: boolean; edits: number; agents: number } {
-    return { stale: this.edits + this.agents > 0 && this.board === 0, edits: this.edits, agents: this.agents }
+  verdict(): { stale: boolean; agents: number } {
+    return { stale: this.agents > 0 && this.board === 0, agents: this.agents }
   }
 }
 
@@ -162,7 +159,7 @@ export class Sync {
       const v = this.turn.verdict()
       if (!v.stale) return
       await this.host.setState('stale', true)
-      await this.host.setState('reminder', `上一轮改了 ${v.edits} 次文件 / 派了 ${v.agents} 个 agent，看板未更新；如有进展请补记`)
+      await this.host.setState('reminder', `上一轮派了 ${v.agents} 个 agent，看板未更新；如有进展请补记`)
     })
   }
 }
