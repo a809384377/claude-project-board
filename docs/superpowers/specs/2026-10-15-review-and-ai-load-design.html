@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>待你看与 AI 减负</title>
+<style>
+:root {
+  --bg: #fbfaf7;
+  --fg: #23211d;
+  --muted: #6f6a60;
+  --line: #e4e0d6;
+  --panel: #f2efe8;
+  --accent: #2f7d4f;
+  --accent-soft: #e3f1e8;
+  --warn: #9a5b12;
+  --warn-soft: #f8ecdb;
+  --code-bg: #efece4;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1b1a18;
+    --fg: #e9e5dc;
+    --muted: #a19b8f;
+    --line: #34312c;
+    --panel: #24221f;
+    --accent: #6cc58f;
+    --accent-soft: #1f3528;
+    --warn: #e0a65c;
+    --warn-soft: #3a2c1a;
+    --code-bg: #2a2824;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #1b1a18;
+  --fg: #e9e5dc;
+  --muted: #a19b8f;
+  --line: #34312c;
+  --panel: #24221f;
+  --accent: #6cc58f;
+  --accent-soft: #1f3528;
+  --warn: #e0a65c;
+  --warn-soft: #3a2c1a;
+  --code-bg: #2a2824;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 15px/1.7 -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+}
+main { max-width: 860px; margin: 0 auto; padding: 48px 16px 96px; }
+header { border-bottom: 1px solid var(--line); padding-bottom: 20px; margin-bottom: 32px; }
+h1 { font-size: 28px; line-height: 1.3; margin: 0 0 8px; letter-spacing: -0.01em; }
+.meta { color: var(--muted); font-size: 13px; }
+h2 { font-size: 20px; margin: 48px 0 12px; padding-top: 8px; }
+h3 { font-size: 16px; margin: 28px 0 8px; }
+p, li { margin: 6px 0; }
+ul, ol { padding-left: 22px; }
+code {
+  font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--code-bg);
+  padding: 1px 5px;
+  border-radius: 4px;
+  overflow-wrap: anywhere;
+}
+pre {
+  font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--code-bg);
+  border-radius: 8px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  margin: 12px 0;
+}
+pre code { background: none; padding: 0; }
+.principle {
+  background: var(--accent-soft);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 8px 8px 0;
+  padding: 12px 16px;
+  margin: 16px 0;
+}
+.pending {
+  background: var(--warn-soft);
+  border-left: 3px solid var(--warn);
+  border-radius: 0 8px 8px 0;
+  padding: 12px 16px;
+  margin: 16px 0;
+}
+.pending strong { color: var(--warn); }
+.table-wrap { overflow-x: auto; margin: 12px 0; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { border-bottom: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 13px; }
+td:first-child { white-space: nowrap; }
+.cols td:first-child { white-space: normal; }
+nav.toc { background: var(--panel); border-radius: 8px; padding: 12px 18px; font-size: 14px; }
+nav.toc ol { margin: 4px 0; }
+nav.toc a { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--muted); }
+.figure-cap { color: var(--muted); font-size: 13px; margin-top: -4px; }
+</style>
+</head>
+<body>
+<main>
+
+<header>
+  <h1>「待你看」与 AI 减负 · 设计</h1>
+  <div class="meta">project-board · 2026-10-15</div>
+</header>
+
+<nav class="toc">
+  <ol>
+    <li><a href="#goals">目标</a></li>
+    <li><a href="#review">待你看（用户侧，本机状态）</a></li>
+    <li><a href="#visual">视觉减负</a></li>
+    <li><a href="#ai">AI 侧减负</a></li>
+    <li><a href="#compat">数据与兼容</a></li>
+    <li><a href="#scope">改动范围</a></li>
+    <li><a href="#tests">测试</a></li>
+    <li><a href="#out">不做</a></li>
+  </ol>
+</nav>
+
+<h2 id="goals">目标</h2>
+<ol>
+  <li>看板上等用户过目的事项只负责「提醒 + 跳转」，结论由用户在对话里给出，AI 据此更新看板。</li>
+  <li>用户能自己清理看板上的过时入口，且清理动作不产生任何发给 AI 的信息。</li>
+  <li>看板一屏内的信息量减到「一眼能扫完」。</li>
+  <li>AI 只接收会改变它下一步做法的信息；看板不主动触发 AI 运行，也不制造只为「告知」的上下文。</li>
+</ol>
+<div class="principle">判别标准：一条要交给 AI 的文字，如果 AI 读后不会改变任何行为，就不交。</div>
+
+<h2 id="review">一、待你看（用户侧，本机状态）</h2>
+
+<h3>行为</h3>
+<ul>
+  <li>顶部区块标题为「待你看」，列出所有 <code>status = review</code> 且未被用户收起的事项。每行：状态图标、标题（单行截断）、所在目标 › 步骤、交上来的时间（取 <code>reportedAt</code>，显示为「2 小时前」）、按钮 <strong>[看过了]</strong>。行下列出该事项的验收入口（<code>forReview</code> 关联）。</li>
+  <li><strong>[看过了]</strong>：该事项从「待你看」区块消失；在所属目标里仍按 review 显示，但图标变为 <code>◇</code>、文字变暗、行尾标「已看」。事项状态不变。</li>
+  <li><strong>重新出现</strong>：用户收起的是「这一版」。事项的 <code>reportedAt</code> 变化（AI 再次把它设为 review），或其 <code>forReview</code> 入口集合变化（AI 挂了新文件），该事项重新进入「待你看」。</li>
+  <li><strong>[×]</strong>：每条关联（目标、步骤、事项上的都算）行尾一个 [×]，点后该关联在本机隐藏。一个事项的验收入口全部被隐藏时，视同 [看过了]。</li>
+  <li><strong>找回</strong>：被隐藏的关联在其所属目标 / 步骤 / 事项下折叠为一行「▸ 已隐藏 N 条」，展开后每条带 [恢复]。</li>
+  <li>移除全部「验收通过」按钮和对应的盖章动效；<code>approveItem</code> 动作删除。事项只由 AI 根据对话改为 done。</li>
+  <li>顶部计数药丸「◆ 待你」只计未收起的 review 事项；吉祥物的「等你」姿势同样只看未收起的事项与待确认提议。</li>
+</ul>
+
+<h3>本机状态的存放</h3>
+<ul>
+  <li>文件：<code>~/.cache/project-board/view/&lt;项目根绝对路径的 sha1 前 16 位&gt;.json</code>，Claude Code 与 pi 共用同一份。</li>
+  <li>内容：</li>
+</ul>
+<pre><code>{
+  "seen":   { "&lt;itemId&gt;": "&lt;reportedAt&gt;|&lt;排序后的 forReview target 以 \n 连接的 sha1 前 12 位&gt;" },
+  "hidden": { "&lt;ownerId&gt;": ["&lt;link target&gt;", "..."] }
+}</code></pre>
+<ul>
+  <li><code>seen</code> 的值等于事项当前指纹时视为已看；不等即重新出现。<code>ownerId</code> 为目标 / 步骤 / 事项 id。</li>
+  <li>不写入 <code>ai/board.json</code>，不进 git，不产生 store 变更事件，因此不进入 AI 的「外部变化」通知。</li>
+  <li>读写失败（无权限、文件损坏）时按空状态处理并 toast 一次，不影响看板其他功能。</li>
+  <li>指向已不存在的事项 / 关联的条目不主动清理：它们不影响显示，体积可忽略。</li>
+</ul>
+
+<h3>「待你确认」提议卡片</h3>
+<p>保持现有「同意 / 不要」按钮（会真实执行）。卡片底部加一行暗色提示「也可以在对话里直接说」。</p>
+
+<h2 id="visual">二、视觉减负</h2>
+<pre><code> π  看板 · html_canvas                      ◆1 待你  ●1 在跑  ○3  ✓12
+    ★ 工作台改造首期：按段推进
+╭ 待你看 ───────────────────────────────────────────────╮
+│ ◆ 设计稿 v0.3 · 工作台改造首期   2 小时前   [看过了] │
+│     pm-workbench-redesign-v0.3.md                    │
+╰───────────────────────────────────────────────────────╯
+▎★ 工作台改造首期                            ▰▰▰▰▰▰▰▱▱ 12/16
+   ● 1 底座 4/7 › ✓ 2 › ○ 3 › ○ 4 › ○ 5 › ◐ 6 1/2 › ○ 7 › ○ 8
+   ▾ 1 底座：版本存储与项目身份 ∥ 前端地基
+     ⠋ S5-S7 版本库与存档引擎                    @s5-engine
+     ○ 第 1 段收尾：合并、审查、真机代验
+     ○ 排查 e2e 7 条失败与偶发超时
+     ▸ ✓ 已完成 4 项
+   ▾ 6 PRD-Lab 仓库式推送
+     ○ PRD-Lab 侧收尾                     等：第 2 段共享组件…
+   ▸ 资料 2 条</code></pre>
+<p class="figure-cap">示意：文件名即「打开」，其余按钮悬停时出现；空步骤只留在步骤条里。</p>
+<ul>
+  <li><strong>事项一行</strong>：标题 <code>truncate-end</code> 截成一行；行尾短标签依次为 <code>@owner</code>、<code>等：&lt;waitingFor 截 12 字&gt;</code>。备注、依赖、验收标准、入口全部收进点开后的详情。</li>
+  <li><strong>其他会话的在跑事项</strong>：行尾标「别的会话 · 07-10 21:30」；<code>reportedAt</code> 距今超过 12 小时改为「可能已停」。纯显示逻辑，不通知 AI。</li>
+  <li><strong>空步骤</strong>：没有事项的步骤只在步骤条里出现，下方不渲染步骤标题行，即使用户曾展开过它。</li>
+  <li><strong>关联行</strong>：文件名本身是「打开」按钮；VS Code、复制路径、[×] 放在行尾：
+    <ul>
+      <li>终端画布（支持 hover）：鼠标悬停该行时才显示，沿用目标行「设为关注」的 hover 写法。</li>
+      <li>不支持 hover 的界面（pi、文本降级）：常驻显示 <code>[复制] [×]</code>，不显示 VS Code。</li>
+    </ul>
+  </li>
+  <li><strong>目标资料</strong>：默认折叠为「▸ 资料 N 条」（阈值从 3 降为 0，即一律折叠），焦点目标除外。</li>
+</ul>
+
+<h2 id="ai">三、AI 侧减负</h2>
+
+<h3>规则文本</h3>
+<ul>
+  <li>工作规则只保留一份：留在 <code>board_update</code> 的工具说明里；会话快照（<code>RULES_TEXT</code>）只保留一句定位说明（「以下是会话开始时的看板快照；之后的变化随用户消息告知，最新内容用 board_get」）。</li>
+  <li>删除「你自己替用户做的非关键判断记 kind=delegated」。<code>decision.add</code> 的 <code>kind</code> 仍接受 <code>delegated</code>，以兼容旧数据和旧会话。</li>
+  <li>新增两句（并入现有规则，不另起条目）：
+    <ul>
+      <li>事项标题不超过约 25 字，过程细节写进 note。</li>
+      <li>用户在对话里给出验收结论后，在同一次 board_update 里更新该事项状态（done，或回到 doing / 拆出修改事项）并移除不再需要的入口。</li>
+    </ul>
+  </li>
+  <li>第 3 条改为：「事项进入 review（待用户过目）时挂上验收入口（forReview 关联），让用户能从看板直接打开。」去掉「必须」与 <code>noReviewTargetReason</code> 的要求。</li>
+</ul>
+
+<h3>校验从拦截改为提示</h3>
+<ul>
+  <li><code>checkInvariants</code> 删除「review 必须有入口」这一条；<code>noReviewTargetReason</code> 字段保留读写，仅不再强制。</li>
+  <li><code>board_update</code> 成功结果的 events 里追加提示类事件（<code>kind: 'hint'</code>），只在以下情况出现：
+    <ul>
+      <li>事项变为 review 但没有 forReview 入口：「事项「X」没有验收入口，用户无法从看板打开它」。</li>
+      <li>给已有 forReview 入口的事项再加 forReview 入口：「事项「X」已有入口：A、B；不再需要的用 item.link.remove 移除」。</li>
+    </ul>
+  </li>
+  <li>提示只出现在 AI 本来就在做的这次调用的返回里，不额外触发调用。</li>
+</ul>
+
+<h3>外部变化通知（随用户下一条消息附带）</h3>
+<p><code>describeChanges</code> 只保留会影响 AI 判断的变化：</p>
+<div class="table-wrap">
+<table class="cols">
+  <thead><tr><th>保留</th><th>去掉</th></tr></thead>
+  <tbody>
+    <tr><td>关注变更；目标新增 / 关闭 / 合并 / 暂停 / 恢复 / 改名 / 移除</td><td>目标成果改写、目标关联增减</td></tr>
+    <tr><td>事项新增 / 删除 / 状态变化 / 换目标</td><td>事项改名、换步骤、负责人、备注、等待事项、验收标准、关联增减</td></tr>
+    <tr><td>步骤新增 / 删除</td><td>步骤改名、短名、说明、关联增减、换目标</td></tr>
+    <tr><td>决策新增 / 被替代 / 恢复</td><td>决策文字修改</td></tr>
+    <tr><td>约定新增 / 删除</td><td>约定修改；资料（notes）的一切变化；里程碑的一切变化</td></tr>
+    <tr><td>提议出现 / 被处理</td><td>—</td></tr>
+  </tbody>
+</table>
+</div>
+<p>去掉的变化 AI 需要时可用 board_get 查到。</p>
+
+<h3>「看板没更新」提醒</h3>
+<ul>
+  <li>触发条件改为：本轮主会话调用过派子 agent 的工具（Claude Code <code>Agent</code>，pi <code>subagent</code>）且本轮没有写看板。只改文件不再触发。</li>
+  <li>提醒文字：「上一轮派了 N 个 agent，看板未更新；如有进展请补记」。</li>
+  <li>标题区「⚠ 看板可能落后」与吉祥物挠头沿用同一个标记，随之收窄。</li>
+</ul>
+<div class="pending"><strong>待实现时确认：</strong>宿主能否识别「由子 agent 完成通知触发的回合」。能识别则该回合同样适用上面的条件（处理了 agent 结果却没写看板）；不能识别则只按派出判断。</div>
+
+<h3><code>/board</code> 列表命令</h3>
+<p><code>/board 决策 / 约定 / 资料 / 归档</code> 的输出面向用户，目标是只显示、不进入对话上下文。</p>
+<div class="pending"><strong>待实现时确认：</strong>
+  <ul>
+    <li>pi：<code>sendMessage</code> 的显示型消息是否会进入模型上下文；可选方案是改用通知或 widget 显示。</li>
+    <li>Claude Code：命令输出是否有不进上下文的选项。</li>
+  </ul>
+  能做到则改为只显示；做不到则保持现状，并在 README 说明输出会进入对话。
+</div>
+
+<h2 id="compat">数据与兼容</h2>
+<ul>
+  <li><code>ai/board.json</code> 格式不变，schema 不升级，新旧版本插件可同时读写。</li>
+  <li>旧版本插件仍会显示「验收通过」按钮并能把 review 事项写成 done，与新版本不冲突。</li>
+  <li>本机视图文件是新增文件，旧版本不读取。</li>
+</ul>
+
+<h2 id="scope">改动范围</h2>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>文件</th><th>改动</th></tr></thead>
+  <tbody>
+    <tr><td><code>hooks/view/board.tsx</code></td><td>待你看区块、[看过了] / [×] / 已隐藏折叠、移除验收通过与盖章、事项单行、关联行按钮布局、空步骤不渲染、其他会话在跑标签</td></tr>
+    <tr><td><code>hooks/view/derive.ts</code></td><td><code>reviewItems</code> 过滤已看 / 全隐藏；计数只算未收起；<code>GOAL_LINKS_INLINE</code> 调整；<code>shownLinks</code> 排除隐藏项</td></tr>
+    <tr><td>新增 <code>hooks/view/local.ts</code></td><td>本机视图状态的读写、指纹计算、路径计算（通过 Host 读写文件）</td></tr>
+    <tr><td><code>hooks/register.ts</code><br><code>pi/ui/state.ts</code></td><td>接入本机视图状态；删除 stamps 与 approveItem 相关代码；Actions 增加 <code>markSeen</code>、<code>hideLink</code>、<code>unhideLink</code></td></tr>
+    <tr><td><code>hooks/view/effects.ts</code><br><code>hooks/view/ticker.ts</code><br><code>hooks/view/motion.ts</code></td><td>去掉盖章相关的签名与动效</td></tr>
+    <tr><td><code>hooks/model/invariants.ts</code></td><td>删除 review 入口校验</td></tr>
+    <tr><td><code>hooks/model/ops.ts</code></td><td>追加 hint 事件</td></tr>
+    <tr><td><code>hooks/model/diff.ts</code></td><td>按上表收窄</td></tr>
+    <tr><td><code>hooks/model/summary.ts</code><br><code>hooks/tools.ts</code></td><td>规则只留一份；规则文字调整</td></tr>
+    <tr><td><code>hooks/sync.ts</code></td><td><code>TurnCounter</code> 只按派 agent 判断；提醒文字</td></tr>
+    <tr><td><code>pi/project-board.ts</code></td><td>视 <code>/board</code> 列表命令的确认结果调整</td></tr>
+    <tr><td><code>pi/gen/board.js</code></td><td>重新生成</td></tr>
+    <tr><td><code>README.md</code></td><td>待你看、[×]、本机状态位置、提醒规则、去掉验收通过的说明</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="tests">测试</h2>
+<ul>
+  <li><strong>本机视图状态</strong>：指纹匹配 / 不匹配；<code>reportedAt</code> 变化与入口集合变化后重新出现；全部入口隐藏视同已看；文件损坏按空状态处理。</li>
+  <li><strong>视图</strong>：已看事项不进待你看、计数不含已看、隐藏关联不显示且出现「已隐藏 N 条」、恢复后重新显示、空步骤不渲染标题行、无 hover 界面的按钮集合。</li>
+  <li><strong>模型</strong>：review 无入口可写入并产生 hint；重复挂 forReview 入口产生 hint；<code>describeChanges</code> 只输出保留类别。</li>
+  <li><strong>同步</strong>：只改文件不产生提醒；派 agent 未写看板产生提醒；派 agent 且写了看板不提醒。</li>
+  <li><strong>pi</strong>：<code>bun test pi/tests</code> 通过，生成物不过期。</li>
+  <li><strong>真机</strong>：在 Claude Code 与 pi 会话里各手动走一遍：AI 交一个待你看 → 看过了 → AI 再挂新入口后重新出现 → [×] 隐藏 → 恢复。</li>
+</ul>
+
+<h2 id="out">不做</h2>
+<ul>
+  <li>不把「看过了」「隐藏」同步给 AI 或写进项目看板文件。</li>
+  <li>不给关联新增时间字段；时间取事项的 <code>reportedAt</code>。</li>
+  <li>不新增 AI 在会话开始时核对在跑事项的流程。</li>
+</ul>
+
+</main>
+</body>
+</html>
