@@ -1,6 +1,6 @@
 import { goalState, isOpen, itemsOfStep, progressOf, stepState, type GoalState, type Progress, type StepState } from '../model/derive'
 import type { Board, Goal, Item, ItemStatus, Link, Step } from '../model/types'
-import { isWaiting, visibleLinks, type LocalView } from './local'
+import { EMPTY_LOCAL, isWaiting, visibleLinks, type LocalView } from './local'
 
 /** Pure derivations the board view draws from: order, open/closed rules, counts. */
 
@@ -35,7 +35,14 @@ export function defaultOpenUnits(g: Goal): Set<string> {
 
 export const unitOpen = (g: Goal, u: Unit, expanded: Record<string, boolean>): boolean => expanded[u.id] ?? defaultOpenUnits(g).has(u.id)
 
-export const unitState = (u: Unit): StepState => stepState(u.items)
+/** A review item this user has looked at (or hidden every entry of) is not waiting on them: it counts as under way. */
+const calmItems = (lv: LocalView, items: readonly Item[]): Item[] =>
+  items.map(i => (i.status === 'review' && !isWaiting(lv, i) ? { ...i, status: 'doing' as const } : i))
+
+/** The goal as this user's colours see it: looked-at review items count as doing. */
+export const calmGoal = (lv: LocalView, g: Goal): Goal => ({ ...g, items: calmItems(lv, g.items) })
+
+export const unitState = (u: Unit, lv: LocalView = EMPTY_LOCAL): StepState => stepState(calmItems(lv, u.items))
 
 export type Parts = { active: Goal[]; paused: Goal[]; finished: Goal[] }
 
@@ -44,16 +51,16 @@ export type Parts = { active: Goal[]; paused: Goal[]; finished: Goal[] }
  * then not started; ties keep the file's order), the paused fold and the finished fold.
  * A finished goal in `held` (its confetti is still falling) stays in the list, ranked with the goals it just left.
  */
-export function partitionGoals(b: Board, held: ReadonlySet<string> = new Set()): Parts {
+export function partitionGoals(b: Board, held: ReadonlySet<string> = new Set(), lv: LocalView = EMPTY_LOCAL): Parts {
   const rank = (g: Goal): number => {
     if (g.id === b.focus.goalId) return 0
-    const s = goalState(g)
+    const s = goalState(calmGoal(lv, g))
     return s === 'review' || s === 'running' || held.has(g.id) ? 1 : s === 'active' ? 2 : 3
   }
   const out: Parts = { active: [], paused: [], finished: [] }
   const live: Array<{ g: Goal; n: number }> = []
   b.goals.forEach((g, n) => {
-    const s = goalState(g)
+    const s = goalState(calmGoal(lv, g))
     if (s === 'paused') out.paused.push(g)
     else if (s === 'done' && !held.has(g.id)) out.finished.push(g)
     else live.push({ g, n })
@@ -63,23 +70,23 @@ export function partitionGoals(b: Board, held: ReadonlySet<string> = new Set()):
 }
 
 /** Whether the goal's body is open. Goals inside a fold open only when asked to. */
-export function goalOpen(b: Board, g: Goal, expanded: Record<string, boolean>, mode: Mode): boolean {
+export function goalOpen(b: Board, g: Goal, expanded: Record<string, boolean>, mode: Mode, lv: LocalView = EMPTY_LOCAL): boolean {
   const chosen = expanded[g.id]
   if (chosen !== undefined) return chosen
   if (g.id === b.focus.goalId) return true
   if (mode === 'band-full' || g.status === 'paused') return false
-  const s = goalState(g)
+  const s = goalState(calmGoal(lv, g))
   return s === 'review' || s === 'running'
 }
 
 export const itemOpen = (it: Item, expanded: Record<string, boolean>): boolean => expanded[it.id] === true
 
 /** Items listed as rows: live ones in goals that are open, and in units that are open when the goal has steps. */
-export function listedItems(b: Board, expanded: Record<string, boolean>, mode: Mode): Item[] {
+export function listedItems(b: Board, expanded: Record<string, boolean>, mode: Mode, lv: LocalView = EMPTY_LOCAL): Item[] {
   const out: Item[] = []
-  const { active, paused, finished } = partitionGoals(b)
+  const { active, paused, finished } = partitionGoals(b, undefined, lv)
   for (const g of active) {
-    if (!goalOpen(b, g, expanded, mode)) continue
+    if (!goalOpen(b, g, expanded, mode, lv)) continue
     if (g.steps.length === 0) out.push(...g.items.filter(isOpen))
     else for (const u of unitsOf(g)) if (unitOpen(g, u, expanded)) out.push(...u.items.filter(isOpen))
   }
@@ -88,7 +95,7 @@ export function listedItems(b: Board, expanded: Record<string, boolean>, mode: M
 }
 
 /** Items whose details are on screen: what register.ts checks the files of. */
-export const openItems = (b: Board, expanded: Record<string, boolean>, mode: Mode): Item[] => listedItems(b, expanded, mode).filter(it => itemOpen(it, expanded))
+export const openItems = (b: Board, expanded: Record<string, boolean>, mode: Mode, lv: LocalView = EMPTY_LOCAL): Item[] => listedItems(b, expanded, mode, lv).filter(it => itemOpen(it, expanded))
 
 /** A step's links, and the focus goal's, are listed when there are at most this many; more fold into "资料 N 条". */
 export const LINKS_INLINE = 3
@@ -116,10 +123,10 @@ export function shownLinks(b: Board, expanded: Record<string, boolean>, mode: Mo
     const vis = visibleLinks(lv, ownerId, links)
     if (linksOpen(vis, `links:${ownerId}`, expanded, inline)) out.push(...vis)
   }
-  for (const it of openItems(b, expanded, mode)) out.push(...visibleLinks(lv, it.id, it.links))
-  const { active, paused, finished } = partitionGoals(b)
+  for (const it of openItems(b, expanded, mode, lv)) out.push(...visibleLinks(lv, it.id, it.links))
+  const { active, paused, finished } = partitionGoals(b, undefined, lv)
   for (const g of active) {
-    if (!goalOpen(b, g, expanded, mode)) continue
+    if (!goalOpen(b, g, expanded, mode, lv)) continue
     shown(g.id, g.links, goalLinksInline(b, g))
     for (const s of g.steps) if (unitOpen(g, { id: s.id, step: s, items: [] }, expanded)) shown(s.id, s.links, LINKS_INLINE)
   }

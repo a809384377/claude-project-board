@@ -154,8 +154,10 @@ const REPORTING: readonly ItemStatus[] = ['running', 'doing', 'review']
 
 function setStatus(it: Item, status: ItemStatus, ctx: OpCtx): void {
   const wasDone = it.status === 'done'
+  const was = it.status
   it.status = status
-  if (REPORTING.includes(status)) {
+  // running / doing stamp the latest report; review stamps only the moment it is handed in.
+  if (REPORTING.includes(status) && !(status === 'review' && was === 'review')) {
     it.reportedAt = ctx.now
     it.session = ctx.session
   }
@@ -574,7 +576,7 @@ function reviewHints(before: Board, after: Board): BoardEvent[] {
       if (i.status === 'review' && prev?.status !== 'review' && entries.length === 0) {
         out.push({ kind: 'hint', id: i.id, summary: `事项「${clip(i.title)}」没有验收入口，用户无法从看板打开它` })
       }
-      const was = prev?.links.filter(l => l.forReview) ?? []
+      const was = (prev?.links.filter(l => l.forReview) ?? []).filter(w => entries.some(l => l.target === w.target))
       if (was.length > 0 && entries.some(l => !was.some(w => w.target === l.target))) {
         out.push({ kind: 'hint', id: i.id, summary: `事项「${clip(i.title)}」已有入口：${was.map(l => l.target).join('、')}；不再需要的用 item.link.remove 移除` })
       }

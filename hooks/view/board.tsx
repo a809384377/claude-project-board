@@ -16,6 +16,7 @@ import {
   LINKS_INLINE,
   linksOpen,
   looseItems,
+  calmGoal,
   goalOpen,
   partitionGoals,
   reviewItems,
@@ -225,7 +226,7 @@ export function renderBoard(els: Els, vm: ViewModel, actions: Actions, mode: Mod
     )
   }
   const c: Ctx = { els, vm, actions, mode, budget: { left: ITEM_BUDGET } }
-  const parts = partitionGoals(b, new Set(b.goals.filter(g => confettiStart(vm, g.id) !== undefined).map(g => g.id)))
+  const parts = partitionGoals(b, new Set(b.goals.filter(g => confettiStart(vm, g.id) !== undefined).map(g => g.id)), vm.local)
   const total = b.goals.length
   const body = (
     <Box flexDirection="column">
@@ -478,8 +479,8 @@ function goalBlock(c: Ctx, g: Goal, muted: boolean): RenderElement {
   const { Box, Text, Button } = c.els
   const { vm } = c
   const b = vm.board as Board
-  const state = goalState(g)
-  const open = muted ? vm.expanded[g.id] === true : goalOpen(b, g, vm.expanded, c.mode)
+  const state = goalState(calmGoal(vm.local, g))
+  const open = muted ? vm.expanded[g.id] === true : goalOpen(b, g, vm.expanded, c.mode, vm.local)
   const isFocus = g.id === b.focus.goalId
   const { done, total } = fractionOf(g.items)
   const title = `${open ? '▾' : '▸'} ${isFocus ? '★ ' : ''}${clip(g.title, 80)}${g.status === 'paused' ? '（暂停）' : ''}`
@@ -545,7 +546,7 @@ function stepStrip(c: Ctx, g: Goal, goalIsOpen: boolean): RenderElement {
   const { Box, Text, Button } = c.els
   const { vm } = c
   const toks = unitsOf(g).map(u => {
-    const st = unitState(u)
+    const st = unitState(u, vm.local)
     const on = goalIsOpen && unitOpen(g, u, vm.expanded)
     const { done, total } = fractionOf(u.items)
     const name = u.step === null ? '其他' : stepShortName(u.step)
@@ -612,7 +613,7 @@ function itemsGroup(c: Ctx, items: readonly Item[], foldKey: string): RenderElem
         [...done, ...dropped].map(it => (
           <Box paddingLeft={2}>
             <Text dimColor wrap="truncate-end">
-              {`${STATUS_ICON[it.status]} ${clip(it.title, 120)}${it.status === 'done' ? (it.doneBy === 'user' ? '（你验收）' : '（AI 验收）') : ''}`}
+              {`${STATUS_ICON[it.status]} ${clip(it.title, 120)}`}
             </Text>
           </Box>
         ))}

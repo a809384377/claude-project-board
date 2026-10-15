@@ -12,6 +12,7 @@ import {
   LINKS_INLINE,
   linksOpen,
   looseItems,
+  calmGoal,
   goalOpen,
   partitionGoals,
   reviewItems,
@@ -132,7 +133,7 @@ export function renderBoard(els, vm, actions, mode) {
     }, "未改动任何内容；修复文件后会自动恢复"));
   }
   const c = { els, vm, actions, mode, budget: { left: ITEM_BUDGET } };
-  const parts = partitionGoals(b, new Set(b.goals.filter((g) => confettiStart(vm, g.id) !== undefined).map((g) => g.id)));
+  const parts = partitionGoals(b, new Set(b.goals.filter((g) => confettiStart(vm, g.id) !== undefined).map((g) => g.id)), vm.local);
   const total = b.goals.length;
   const body = h(Box, {
     flexDirection: "column"
@@ -401,8 +402,8 @@ function goalBlock(c, g, muted) {
   const { Box, Text, Button } = c.els;
   const { vm } = c;
   const b = vm.board;
-  const state = goalState(g);
-  const open = muted ? vm.expanded[g.id] === true : goalOpen(b, g, vm.expanded, c.mode);
+  const state = goalState(calmGoal(vm.local, g));
+  const open = muted ? vm.expanded[g.id] === true : goalOpen(b, g, vm.expanded, c.mode, vm.local);
   const isFocus = g.id === b.focus.goalId;
   const { done, total } = fractionOf(g.items);
   const title = `${open ? "▾" : "▸"} ${isFocus ? "★ " : ""}${clip(g.title, 80)}${g.status === "paused" ? "（暂停）" : ""}`;
@@ -472,7 +473,7 @@ function stepStrip(c, g, goalIsOpen) {
   const { Box, Text, Button } = c.els;
   const { vm } = c;
   const toks = unitsOf(g).map((u) => {
-    const st = unitState(u);
+    const st = unitState(u, vm.local);
     const on = goalIsOpen && unitOpen(g, u, vm.expanded);
     const { done, total } = fractionOf(u.items);
     const name = u.step === null ? "其他" : stepShortName(u.step);
@@ -547,7 +548,7 @@ function itemsGroup(c, items, foldKey) {
   }, h(Text, {
     dimColor: true,
     wrap: "truncate-end"
-  }, `${STATUS_ICON[it.status]} ${clip(it.title, 120)}${it.status === "done" ? it.doneBy === "user" ? "（你验收）" : "（AI 验收）" : ""}`))));
+  }, `${STATUS_ICON[it.status]} ${clip(it.title, 120)}`))));
 }
 function rowTags(vm, it) {
   const out = [];

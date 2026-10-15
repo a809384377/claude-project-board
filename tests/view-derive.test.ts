@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'claude-code/testing'
 import { emptyBoard } from '../hooks/model/parse'
 import type { Board, Goal, Item, Link, Step } from '../hooks/model/types'
-import { boardCounts, defaultOpenUnits, goalLinksInline, goalOpen, LINKS_INLINE, listedItems, openItems, partitionGoals, reviewItems, shownLinks, unitOpen, unitsOf } from '../hooks/view/derive'
+import { boardCounts, calmGoal, unitState, defaultOpenUnits, goalLinksInline, goalOpen, LINKS_INLINE, listedItems, openItems, partitionGoals, reviewItems, shownLinks, unitOpen, unitsOf } from '../hooks/view/derive'
+import { goalState } from '../hooks/model/derive'
 import { EMPTY_LOCAL, hideLink, markSeen } from '../hooks/view/local'
 
 const NOW = '2026-10-12T09:00:00+08:00'
@@ -29,6 +30,29 @@ describe('boardCounts', () => {
     const lv = hideLink(markSeen(EMPTY_LOCAL, rev), '2', 'x.md')
     expect(boardCounts(b, lv)).toEqual({ review: 1, running: 0, todo: 0, done: 0 })
     expect(reviewItems(b, lv).map(r => r.item.id)).toEqual(['3'])
+  })
+})
+
+describe('looked-at review items do not count as waiting in colours and order', () => {
+  const rev = item('1', { status: 'review', reportedAt: NOW })
+  const waiting = goal('w', [item('2', { status: 'review' })])
+  const looked = goal('l', [rev], { steps: [step('s')] })
+  looked.items[0]!.stepId = 's'
+  const lv = markSeen(EMPTY_LOCAL, rev)
+  test('the step and the goal fall back to under way; a still-waiting one stays review', () => {
+    const u = unitsOf(looked)[0]!
+    expect(unitState(u)).toBe('review')
+    expect(unitState(u, lv)).toBe('active')
+    expect(goalState(calmGoal(lv, looked))).toBe('active')
+    expect(goalState(calmGoal(lv, waiting))).toBe('review')
+    expect(looked.items[0]!.status).toBe('review')
+  })
+  test('the goal ranks and opens like an under-way one', () => {
+    const b = boardOf([goal('x', [item('3', { status: 'todo' })]), looked, waiting])
+    expect(partitionGoals(b, new Set(), lv).active.map(g => g.id)).toEqual(['w', 'l', 'x'])
+    expect(partitionGoals(b).active.map(g => g.id)).toEqual(['l', 'w', 'x'])
+    expect(goalOpen(b, looked, {}, 'pane', lv)).toBe(false)
+    expect(goalOpen(b, looked, {}, 'pane')).toBe(true)
   })
 })
 

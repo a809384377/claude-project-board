@@ -136,6 +136,20 @@ describe('ops: normal path of every op', () => {
   })
 })
 
+describe('ops: review reportedAt', () => {
+  test('re-sending status review leaves reportedAt alone; coming into review and running refresh it', () => {
+    let b = apply(base(), [{ op: 'item.update', id: 'i-a', status: 'review' }], ctx({ now: '2026-10-11T10:00:00+08:00' }))
+    expect(b.goals[0]!.items[0]!.reportedAt).toBe('2026-10-11T10:00:00+08:00')
+    b = apply(b, [{ op: 'item.update', id: 'i-a', status: 'review', note: '补一句' }], ctx({ now: '2026-10-11T11:00:00+08:00' }))
+    expect(b.goals[0]!.items[0]).toMatchObject({ note: '补一句', reportedAt: '2026-10-11T10:00:00+08:00' })
+    b = apply(b, [{ op: 'item.update', id: 'i-a', status: 'running' }], ctx({ now: '2026-10-11T12:00:00+08:00' }))
+    b = apply(b, [{ op: 'item.update', id: 'i-a', status: 'running' }], ctx({ now: '2026-10-11T13:00:00+08:00' }))
+    expect(b.goals[0]!.items[0]!.reportedAt).toBe('2026-10-11T13:00:00+08:00')
+    b = apply(b, [{ op: 'item.update', id: 'i-a', status: 'review' }], ctx({ now: '2026-10-11T14:00:00+08:00' }))
+    expect(b.goals[0]!.items[0]!.reportedAt).toBe('2026-10-11T14:00:00+08:00')
+  })
+})
+
 describe('ops: batches are all-or-nothing', () => {
   test('third op fails -> index 2, input untouched', () => {
     const b = base()
@@ -218,13 +232,19 @@ describe('ops: invariants on the final state', () => {
     expect(hints[0]!.summary).toContain('item.link.remove')
   })
 
-  test('swapping an entry in one batch hints; a plain (non-review) link added beside an entry does not', () => {
+  test('swapping an entry in one batch does not hint with the removed one; a plain (non-review) link added beside an entry does not', () => {
     const b = apply(base(), [{ op: 'item.link.add', id: 'i-a', link: fileLink }])
     const swap = must(applyOps(b, [
       { op: 'item.link.add', id: 'i-a', link: { ...fileLink, target: 'ai/r2.md' } },
       { op: 'item.link.remove', id: 'i-a', target: 'ai/r.md' },
     ], ctx()))
-    expect(swap.events.filter(e => e.kind === 'hint')).toHaveLength(1)
+    expect(swap.events.filter(e => e.kind === 'hint')).toEqual([])
+    const keep = must(applyOps(apply(b, [{ op: 'item.link.add', id: 'i-a', link: { ...fileLink, target: 'ai/r3.md' } }]), [
+      { op: 'item.link.add', id: 'i-a', link: { ...fileLink, target: 'ai/r2.md' } },
+      { op: 'item.link.remove', id: 'i-a', target: 'ai/r.md' },
+    ], ctx()))
+    expect(keep.events.filter(e => e.kind === 'hint').map(e => e.summary).join()).toContain('已有入口：ai/r3.md')
+    expect(keep.events.filter(e => e.kind === 'hint').map(e => e.summary).join()).not.toContain('ai/r.md')
     const plain = must(applyOps(b, [{ op: 'item.link.add', id: 'i-a', link: { type: 'ref', target: 'abc123', forReview: false } }], ctx()))
     expect(plain.events.filter(e => e.kind === 'hint')).toEqual([])
   })

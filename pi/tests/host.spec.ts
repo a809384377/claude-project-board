@@ -121,7 +121,10 @@ describe('the pi board view keeps 看过了 and [×] on this machine', () => {
       const hit = d.hits.find(h => h.key === key)
       if (hit === undefined) throw new Error(`no button ${key}: ${d.hits.map(h => h.key).join(' ')}`)
       ui.press(d.hits, hit.x, hit.y)
-      await tick()
+    }
+    const until = async (ok: (text: string) => boolean): Promise<void> => {
+      const end = Date.now() + 2000
+      while (!ok(screen()) && Date.now() < end) await tick()
     }
     const screen = (): string => {
       const d = ui.board(80, 'pane', 'pane')
@@ -131,11 +134,17 @@ describe('the pi board view keeps 看过了 and [×] on this machine', () => {
     await tick()
     expect(screen()).toContain('待你看')
     await press('seen:i-1')
+    await until(t => t.includes('已看') && !t.includes('待你看'))
     expect(screen()).not.toContain('待你看')
     expect(screen()).toContain('已看')
     await press('link:g-1:0:hide')
+    await until(t => t.includes('已隐藏 1 条'))
     expect(screen()).toContain('已隐藏 1 条')
-    const file = JSON.parse(await readFile(localPath(home, dir), 'utf8'))
+    let file = JSON.parse(await readFile(localPath(home, dir), 'utf8'))
+    for (const end = Date.now() + 2000; file.hidden['g-1'] === undefined && Date.now() < end; ) {
+      await tick()
+      file = JSON.parse(await readFile(localPath(home, dir), 'utf8'))
+    }
     expect(Object.keys(file.seen)).toEqual(['i-1'])
     expect(file.hidden).toEqual({ 'g-1': ['g.md'] })
     expect(await readFile(join(dir, 'ai', 'board.json'), 'utf8')).toBe(text)

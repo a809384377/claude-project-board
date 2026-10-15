@@ -329,8 +329,9 @@ for (const surface of SURFACES) {
       expect((await ui.find({ key: 'done:g-car' }))?.text).toContain('✓ 已完成 2 项 · 搁置 1 项')
       expect(await ui.find({ type: 'Text', text: /车身生成器/ })).toBeUndefined()
       await ui.press({ key: 'done:g-car' })
-      expect(await texts(ui, /车身生成器（你验收）/)).toHaveLength(1)
-      expect(await texts(ui, /车牌贴图（AI 验收）/)).toHaveLength(1)
+      expect(await texts(ui, /车身生成器/)).toHaveLength(1)
+      expect(await texts(ui, /验收）/)).toHaveLength(0)
+      expect(await texts(ui, /车牌贴图/)).toHaveLength(1)
       const user = await ui.find({ type: 'Text', text: /车身生成器/ })
       const claude = await ui.find({ type: 'Text', text: /车牌贴图/ })
       // Who accepted an item no longer shows in colour: both are plain grey
@@ -2165,6 +2166,21 @@ describe('status colours: green when something is happening for you, grey otherw
       expect(p.color).toBeUndefined()
       expect(p.dimColor).toBe(true)
     }
+  })
+
+  test('看过了 also takes the step bar token out of the waiting green: it turns to the dim under-way icon', async ($, on) => {
+    const b = steppedBoard()
+    b.goals[0]!.items.find(i => i.id === 'i-b2')!.status = 'done'
+    world(on, b, { theme: 'dark' })
+    mock.clock(on)
+    await $.session.start(START)
+    const ui = await pane($, 'desktop')
+    expect((await propsOf(ui, /^◆ B/))[0]!.color).toBe(GREEN)
+    await ui.press({ key: 'seen:i-b1' })
+    expect(await propsOf(ui, /^◆ B/)).toHaveLength(0)
+    const p = (await propsOf(ui, /^◐ B/))[0]!
+    expect(p.color).toBeUndefined()
+    expect(p.dimColor).toBe(true)
   })
 
   test('item icons: waiting and running are green (an old report dimmed), everything else grey; the to-do box heading and its mark are green', async ($, on) => {
