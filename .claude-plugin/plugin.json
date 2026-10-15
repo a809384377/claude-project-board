@@ -1,6 +1,6 @@
 {
   "name": "project-board",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "项目状态看板：目标、步骤、事项、决策和约定记在项目里的 ai/board.json，终端里随时可看",
   "author": {
     "name": "a809384377"

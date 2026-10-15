@@ -1325,6 +1325,61 @@ describe('sizes', () => {
 
 // ---------- pure view helpers ----------
 
+describe('a long item row stays on one line', () => {
+  const cols = (t: string): number => [...t].reduce((n, ch) => n + (ch.charCodeAt(0) >= 0x2e80 ? 2 : 1), 0)
+  const longTitle = '第 1 段收尾：合并、独立审查、全量 vitest+tsc、前端 build、打 gcanvastest 测试版真机代验（需用户在场）、提交、回写 tech-design 与 code-map'
+  const longOwner = 'subagent sonnet k1-ids（地基）+ v2b-commit（发号）+ a1-seal-cli（seal-show requirements）'
+
+  test('the title is cut to the room the row leaves, the owner to 16 characters, and the tags never shrink', async ($, on) => {
+    const b = fixture()
+    b.goals[2]!.items[0] = item('i-p1', { title: longTitle, owner: longOwner })
+    world(on, b)
+    mock.clock(on)
+    await $.session.start(START)
+    const ui = await pane($, 'terminal')
+    // the Button keeps its Text children to itself: read the title through the row's key
+    const title = inline((await ui.find({ key: 'item:i-p1' })) as Node).slice(2)
+    expect(title.startsWith('第 1 段收尾')).toBe(true)
+    expect(title.endsWith('…')).toBe(true)
+    const owner = (await texts(ui, /^@subagent/))[0] as string
+    expect(owner).toBe(`@${longOwner.slice(0, 16)}…`)
+    // icon, the title, then the tag after a gap: the whole row fits the 60 columns of the pane, less the item indent
+    expect(4 + 2 + cols(title) + 1 + cols(owner)).toBeLessThanOrEqual(60)
+    // the tags sit in a box that does not shrink, so a long title cannot squeeze them into a wrapping column
+    const boxes = (await ui.findAll({ type: 'Box' })) as Node[]
+    expect(boxes.some(x => typeof x !== 'string' && x.props.flexShrink === 0 && inline(x) === owner)).toBe(true)
+  })
+
+  test('tags take at most half the row: the ones that do not fit stay in the details', async ($, on) => {
+    const b = fixture()
+    b.goals[2]!.items[0] = item('i-p1', { title: longTitle, owner: longOwner, waitingFor: '第 2 段共享组件与 RepoSnapshot 定稿' })
+    world(on, b)
+    mock.clock(on)
+    await $.session.start(START)
+    const ui = await pane($, 'terminal')
+    const title = inline((await ui.find({ key: 'item:i-p1' })) as Node).slice(2)
+    expect(cols(title)).toBeGreaterThanOrEqual(Math.floor((60 - 7) / 2) - 1)
+    // the wait outranks the owner: it stays, the owner moves to the details
+    expect((await texts(ui, /^等：第 2 段/)).length).toBe(1)
+    expect(await texts(ui, /^@subagent/)).toHaveLength(0)
+    await ui.press({ key: 'item:i-p1' })
+    expect((await texts(ui, /第 2 段共享组件与 RepoSnapshot 定稿/)).length).toBeGreaterThan(0)
+    expect((await texts(ui, /k1-ids/)).length).toBeGreaterThan(0)
+  })
+
+  test('a step title and a goal title are cut the same way', async ($, on) => {
+    const b = fixture()
+    b.goals[2]!.title = longTitle
+    world(on, b)
+    mock.clock(on)
+    await $.session.start(START)
+    const ui = await pane($, 'terminal')
+    const head = (await texts(ui, /^▾ ★ 第 1 段收尾/))[0] as string
+    expect(head.endsWith('…')).toBe(true)
+    expect(cols(head)).toBeLessThan(60)
+  })
+})
+
 describe('view helpers', () => {
   test('the list puts the focus first and paused goals in their own fold, keeping the board order otherwise', () => {
     const p = partitionGoals(fixture())

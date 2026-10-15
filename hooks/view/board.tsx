@@ -32,7 +32,7 @@ import {
 } from './derive'
 import { rippleStep, type Effects } from './effects'
 import { hiddenLinks, isWaiting, type LocalView } from './local'
-import { clip, describeProposal, entryText, STATUS_ICON } from './text'
+import { cellWidth, clip, describeProposal, entryText, fitCells, STATUS_ICON } from './text'
 export { describeProposal, entryText } from './text'
 import { linkActions, pressLink, resolveTarget, type LinkAction, type Platform } from './links'
 import {
@@ -143,9 +143,18 @@ export const GOAL_LIMIT = 40
 export const STALE_RUN_MS = 12 * 3600_000
 /** Characters of the waiting-for text in an item row; the whole text is in the details. */
 const WAIT_TAG = 12
+/** Characters of the owner in an item row; the whole name is in the details. */
+const OWNER_TAG = 16
+/** Columns left of an item row: the goal's indent and the item list's. */
+const ITEM_INDENT = 4
+/** Columns left of the most deeply set link row: an item's details under a goal. */
+const LINK_INDENT = 10
 const BAR_COLS = { pane: 12, 'band-full': 8 } as const
 
 type Budget = { left: number }
+
+/** Columns inside the board: the band above the prompt draws a frame and padding around it. */
+const innerWidth = (c: { vm: { width: number }; mode: Mode }): number => c.vm.width - (c.mode === 'band-full' ? 4 : 0)
 type Ctx = { els: Els; vm: ViewModel; actions: Actions; mode: Mode; budget: Budget }
 
 // ---------- pure helpers (also used by register.ts) ----------
@@ -483,7 +492,6 @@ function goalBlock(c: Ctx, g: Goal, muted: boolean): RenderElement {
   const open = muted ? vm.expanded[g.id] === true : goalOpen(b, g, vm.expanded, c.mode, vm.local)
   const isFocus = g.id === b.focus.goalId
   const { done, total } = fractionOf(g.items)
-  const title = `${open ? '▾' : '▸'} ${isFocus ? '★ ' : ''}${clip(g.title, 80)}${g.status === 'paused' ? '（暂停）' : ''}`
   const canFocus = !isFocus && g.status !== 'paused' && state !== 'done'
   const focusBtn = <Button key={`focus:${g.id}`} label="设为关注" onPress={() => c.actions.focusGoal(g.id)} />
   // A closed goal on the terminal shows the button only while the pointer is over its head, without moving anything.
@@ -491,6 +499,12 @@ function goalBlock(c: Ctx, g: Goal, muted: boolean): RenderElement {
   const stepped = g.steps.length > 0
   // A shut goal with something running turns a spinner by its title; an open one shows its items turning below.
   const runningItems = open || g.status === 'paused' ? [] : g.items.filter(i => i.status === 'running')
+  const count = total === 0 ? '未开始' : `${done}/${total}`
+  // Mark, spinner, bar, count and a standing focus button take their columns; the title gets the rest.
+  const side = 2 + (runningItems.length > 0 ? 2 : 0) + 1 + BAR_COLS[c.mode] + 1 + cellWidth(count) + (canFocus && !hoverOnly ? 1 + cellWidth('[ 设为关注 ]') : 0)
+  const head = `${open ? '▾' : '▸'} ${isFocus ? '★ ' : ''}`
+  const tail = g.status === 'paused' ? '（暂停）' : ''
+  const title = `${head}${fitCells(g.title, Math.max(8, innerWidth(c) - side - cellWidth(head) - cellWidth(tail) - 1))}${tail}`
   const headSpin =
     runningItems.length === 0
       ? null
@@ -517,7 +531,7 @@ function goalBlock(c: Ctx, g: Goal, muted: boolean): RenderElement {
             </Box>
             <Box flexDirection="row" columnGap={1} flexShrink={0}>
               {progressBar(c, g)}
-              <Text dimColor>{total === 0 ? '未开始' : `${done}/${total}`}</Text>
+              <Text dimColor>{count}</Text>
             </Box>
             {canFocus && !hoverOnly && focusBtn}
             {hoverOnly && (
@@ -579,7 +593,7 @@ function stepBlock(c: Ctx, g: Goal, u: Unit): RenderElement {
   return (
     <Box flexDirection="column">
       <Button key={`sh:${u.id}`} plain onPress={() => c.actions.toggle(u.id, false)}>
-        <Text bold wrap="truncate-end">{`▾ ${step === null ? '其他' : clip(step.title, 80)}`}</Text>
+        <Text bold wrap="truncate-end">{`▾ ${step === null ? '其他' : fitCells(step.title, Math.max(8, innerWidth(c) - 2 - 2 - (1 + cellWidth(` ${done}/${total}`)) - 1))}`}</Text>
         {step !== null && <Text dimColor>{` ${done}/${total}`}</Text>}
       </Button>
       {step !== null && step.links.length > 0 && <Box paddingLeft={2}>{linksBlock(c, step.id, step.links, { inline: LINKS_INLINE, title: '资料', markReview: false })}</Box>}
@@ -622,15 +636,30 @@ function itemsGroup(c: Ctx, items: readonly Item[], foldKey: string): RenderElem
 }
 
 /** The short marks at the end of an item row: owner, what it waits for, and for another session's running item when it last reported. */
-function rowTags(vm: ViewModel, it: Item): string[] {
-  const out: string[] = []
-  if (it.owner !== '') out.push(`@${it.owner}`)
-  if (it.waitingFor !== '') out.push(`等：${clip(it.waitingFor, WAIT_TAG)}`)
+/** The tags at the end of an item row in the order drawn, each with its rank when room is short (0 is kept first). */
+function rowTags(vm: ViewModel, it: Item, seen: boolean): Array<{ text: string; rank: number }> {
+  const out: Array<{ text: string; rank: number }> = []
+  if (it.owner !== '') out.push({ text: `@${clip(it.owner, OWNER_TAG)}`, rank: 2 })
+  if (it.waitingFor !== '') out.push({ text: `等：${clip(it.waitingFor, WAIT_TAG)}`, rank: 1 })
   if (it.status === 'running' && !isMine(it, vm)) {
     const age = ageOf(it.reportedAt, vm.now)
-    out.push(age !== null && age > STALE_RUN_MS ? '可能已停' : `别的会话${it.reportedAt !== '' ? ` · ${shortTime(it.reportedAt)}` : ''}`)
+    out.push({ text: age !== null && age > STALE_RUN_MS ? '可能已停' : `别的会话${it.reportedAt !== '' ? ` · ${shortTime(it.reportedAt)}` : ''}`, rank: 0 })
   }
+  if (seen) out.push({ text: '已看', rank: 0 })
   return out
+}
+
+/** The tags that fit in `budget` columns (a gap before each), taken by rank, drawn in their own order. */
+function fitTags(all: ReadonlyArray<{ text: string; rank: number }>, budget: number): { tags: string[]; used: number } {
+  const keep = new Set<number>()
+  let used = 0
+  for (const n of all.map((_, k) => k).sort((x, y) => (all[x] as { rank: number }).rank - (all[y] as { rank: number }).rank || x - y)) {
+    const w = 1 + cellWidth((all[n] as { text: string }).text)
+    if (used + w > budget) continue
+    keep.add(n)
+    used += w
+  }
+  return { tags: all.filter((_, k) => keep.has(k)).map(t => t.text), used }
 }
 
 /** What the item still waits on: unfinished dependencies, two titles and a count. */
@@ -653,8 +682,12 @@ function itemRow(c: Ctx, it: Item): RenderElement {
   const seen = it.status === 'review' && !isWaiting(vm.local, it)
   const ic = seen ? { dim: true } : iconColor(it, vm)
   const spin = it.status === 'running' ? spinner(c, `spin:${it.id}`, isMine(it, vm)) : null
-  const tags = [...rowTags(vm, it), ...(seen ? ['已看'] : [])]
   const rowBg = rippleBg(c, it.id, itemRipple(it.status))
+  // Icon and its space take two columns. The title keeps what it needs up to half of the rest, so a long owner or wait
+  // cannot squeeze it away; tags that do not fit are in the details. The title then gets whatever the tags left.
+  const avail = innerWidth(c) - ITEM_INDENT - 2 - 1
+  const { tags, used } = fitTags(rowTags(vm, it, seen), avail - Math.min(cellWidth(it.title), Math.floor(avail / 2)))
+  const room = avail - used
   return (
     <Box flexDirection="column" {...(rowBg === undefined ? {} : { backgroundColor: rowBg })}>
       <Box flexDirection="row" columnGap={1}>
@@ -662,12 +695,16 @@ function itemRow(c: Ctx, it: Item): RenderElement {
           {spin}
           <Button key={`item:${it.id}`} plain onPress={() => c.actions.toggle(it.id, !open)}>
             {spin === null && <Text color={ic.color} dimColor={ic.dim === true}>{seen ? '◇' : STATUS_ICON[it.status]}</Text>}
-            <Text dimColor={seen} wrap="truncate-end">{` ${clip(it.title, 120)}`}</Text>
+            <Text dimColor={seen} wrap="truncate-end">{` ${fitCells(it.title, Math.max(8, room))}`}</Text>
           </Button>
         </Box>
-        {tags.map(t => (
-          <Text dimColor>{t}</Text>
-        ))}
+        {tags.length > 0 && (
+          <Box flexDirection="row" columnGap={1} flexShrink={0}>
+            {tags.map(t => (
+              <Text dimColor>{t}</Text>
+            ))}
+          </Box>
+        )}
       </Box>
       {open && details(c, it)}
     </Box>
@@ -689,34 +726,42 @@ function linkRow(c: Ctx, key: string, l: Link, prefix: string, ownerId: string):
   const { vm } = c
   const acts = linkActions(l, vm.root, vm.platform, vm.hasCode, vm.home)
   const gone = l.type === 'path' && vm.missing.has(resolveTarget(l.target, vm.root, vm.home))
-  const name = `${prefix}${linkName(l)}${gone ? '（文件不存在）' : ''}`
+  const missingNote = gone ? '（文件不存在）' : ''
   const opener = acts.find(a => a.kind === 'open')
+  const labelOf = (a: LinkAction): string => (vm.hover || a.kind !== 'copy' || l.type === 'command' ? a.label : '复制')
   const btn = (a: LinkAction): RenderElement => (
-    <Button key={`${key}:${a.kind}`} label={vm.hover || a.kind !== 'copy' || l.type === 'command' ? a.label : '复制'} dimColor={gone && a.kind !== 'copy'} onPress={press => c.actions.link(a, press.surface)} />
+    <Button key={`${key}:${a.kind}`} label={labelOf(a)} dimColor={gone && a.kind !== 'copy'} onPress={press => c.actions.link(a, press.surface)} />
   )
   // Without something to open, copying is what the link is for: that button never hides.
   const fixed = opener === undefined ? acts.filter(a => a.kind === 'copy') : []
   const extra = acts.filter(a => a !== opener && !fixed.includes(a) && (vm.hover || a.kind !== 'vscode'))
   const hide = <Button key={`${key}:hide`} label="×" onPress={() => c.actions.hideLink(ownerId, l.target)} />
+  // The buttons that stand on the row keep their columns; the name is cut to the rest, measured from the deepest
+  // indent a link row sits at.
+  const standing = vm.hover ? fixed : [...fixed, ...extra]
+  const btnCells = standing.reduce((n, a) => n + 1 + cellWidth(`[ ${labelOf(a)} ]`), 0) + (vm.hover ? 0 : 1 + cellWidth('[ × ]'))
+  // A missing file says so whatever the cut.
+  const shown = `${fitCells(`${prefix}${linkName(l)}`, Math.max(8, innerWidth(c) - LINK_INDENT - btnCells - cellWidth(missingNote) - 1))}${missingNote}`
   return (
     <Box flexDirection="row" columnGap={1} {...(vm.hover ? { key: `lh:${key}` } : {})}>
       <Box flexGrow={1} flexShrink={1}>
         {opener === undefined ? (
-          <Text dimColor={gone} wrap="truncate-end">{name}</Text>
+          <Text dimColor={gone} wrap="truncate-end">{shown}</Text>
         ) : (
           <Button key={`${key}:open`} plain dimColor={gone} onPress={press => c.actions.link(opener, press.surface)}>
-            <Text dimColor={gone} wrap="truncate-end">{name}</Text>
+            <Text dimColor={gone} wrap="truncate-end">{shown}</Text>
           </Button>
         )}
       </Box>
-      {fixed.map(btn)}
-      {vm.hover ? (
+      <Box flexDirection="row" columnGap={1} flexShrink={0}>
+        {fixed.map(btn)}
+        {!vm.hover && [...extra.map(btn), hide]}
+      </Box>
+      {vm.hover && (
         <Box position="absolute" right={0} top={0} display="none" hover={{ display: 'flex' }} columnGap={1}>
           {extra.map(btn)}
           {hide}
         </Box>
-      ) : (
-        [...extra.map(btn), hide]
       )}
     </Box>
   )
@@ -727,6 +772,7 @@ function details(c: Ctx, it: Item): RenderElement {
   const { Box, Text } = c.els
   const b = c.vm.board as Board
   const lines: string[] = []
+  if (it.owner !== '') lines.push(`负责：${clip(it.owner, 200)}`)
   if (it.status === 'running' && !isMine(it, c.vm)) lines.push(`别的会话报告在跑${it.reportedAt !== '' ? ` · ${shortTime(it.reportedAt)}` : ''} · 未核实`)
   if (it.waitingFor !== '') lines.push(`等：${clip(it.waitingFor, 200)}`)
   const deps = dependsText(b, it)

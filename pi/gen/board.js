@@ -25,7 +25,7 @@ import {
 } from "../../hooks/view/derive";
 import { rippleStep } from "../../hooks/view/effects";
 import { hiddenLinks, isWaiting } from "../../hooks/view/local";
-import { clip, describeProposal, entryText, STATUS_ICON } from "../../hooks/view/text";
+import { cellWidth, clip, describeProposal, entryText, fitCells, STATUS_ICON } from "../../hooks/view/text";
 export { describeProposal, entryText } from "../../hooks/view/text";
 import { linkActions, pressLink, resolveTarget } from "../../hooks/view/links";
 import {
@@ -61,7 +61,11 @@ export const ITEM_BUDGET = 50;
 export const GOAL_LIMIT = 40;
 export const STALE_RUN_MS = 12 * 3600000;
 const WAIT_TAG = 12;
+const OWNER_TAG = 16;
+const ITEM_INDENT = 4;
+const LINK_INDENT = 10;
 const BAR_COLS = { pane: 12, "band-full": 8 };
+const innerWidth = (c) => c.vm.width - (c.mode === "band-full" ? 4 : 0);
 const isMine = (it, vm) => it.session === vm.sessionId && it.session !== "";
 const greenText = (vm) => vm.palette === null ? "success" : hex(statusGreen(vm.palette));
 function iconColor(it, vm) {
@@ -406,7 +410,6 @@ function goalBlock(c, g, muted) {
   const open = muted ? vm.expanded[g.id] === true : goalOpen(b, g, vm.expanded, c.mode, vm.local);
   const isFocus = g.id === b.focus.goalId;
   const { done, total } = fractionOf(g.items);
-  const title = `${open ? "▾" : "▸"} ${isFocus ? "★ " : ""}${clip(g.title, 80)}${g.status === "paused" ? "（暂停）" : ""}`;
   const canFocus = !isFocus && g.status !== "paused" && state !== "done";
   const focusBtn = h(Button, {
     key: `focus:${g.id}`,
@@ -416,6 +419,11 @@ function goalBlock(c, g, muted) {
   const hoverOnly = canFocus && !open && vm.canvas;
   const stepped = g.steps.length > 0;
   const runningItems = open || g.status === "paused" ? [] : g.items.filter((i) => i.status === "running");
+  const count = total === 0 ? "未开始" : `${done}/${total}`;
+  const side = 2 + (runningItems.length > 0 ? 2 : 0) + 1 + BAR_COLS[c.mode] + 1 + cellWidth(count) + (canFocus && !hoverOnly ? 1 + cellWidth("[ 设为关注 ]") : 0);
+  const head = `${open ? "▾" : "▸"} ${isFocus ? "★ " : ""}`;
+  const tail = g.status === "paused" ? "（暂停）" : "";
+  const title = `${head}${fitCells(g.title, Math.max(8, innerWidth(c) - side - cellWidth(head) - cellWidth(tail) - 1))}${tail}`;
   const headSpin = runningItems.length === 0 ? null : spinner(c, `gspin:${g.id}`, runningItems.some((i) => isMine(i, vm))) ?? h(Text, {
     color: greenText(vm)
   }, "●");
@@ -453,7 +461,7 @@ function goalBlock(c, g, muted) {
     flexShrink: 0
   }, progressBar(c, g), h(Text, {
     dimColor: true
-  }, total === 0 ? "未开始" : `${done}/${total}`)), canFocus && !hoverOnly && focusBtn, hoverOnly && h(Box, {
+  }, count)), canFocus && !hoverOnly && focusBtn, hoverOnly && h(Box, {
     position: "absolute",
     right: 0,
     top: 0,
@@ -515,7 +523,7 @@ function stepBlock(c, g, u) {
   }, h(Text, {
     bold: true,
     wrap: "truncate-end"
-  }, `▾ ${step === null ? "其他" : clip(step.title, 80)}`), step !== null && h(Text, {
+  }, `▾ ${step === null ? "其他" : fitCells(step.title, Math.max(8, innerWidth(c) - 2 - 2 - (1 + cellWidth(` ${done}/${total}`)) - 1))}`), step !== null && h(Text, {
     dimColor: true
   }, ` ${done}/${total}`)), step !== null && step.links.length > 0 && h(Box, {
     paddingLeft: 2
@@ -550,17 +558,31 @@ function itemsGroup(c, items, foldKey) {
     wrap: "truncate-end"
   }, `${STATUS_ICON[it.status]} ${clip(it.title, 120)}`))));
 }
-function rowTags(vm, it) {
+function rowTags(vm, it, seen) {
   const out = [];
   if (it.owner !== "")
-    out.push(`@${it.owner}`);
+    out.push({ text: `@${clip(it.owner, OWNER_TAG)}`, rank: 2 });
   if (it.waitingFor !== "")
-    out.push(`等：${clip(it.waitingFor, WAIT_TAG)}`);
+    out.push({ text: `等：${clip(it.waitingFor, WAIT_TAG)}`, rank: 1 });
   if (it.status === "running" && !isMine(it, vm)) {
     const age = ageOf(it.reportedAt, vm.now);
-    out.push(age !== null && age > STALE_RUN_MS ? "可能已停" : `别的会话${it.reportedAt !== "" ? ` · ${shortTime(it.reportedAt)}` : ""}`);
+    out.push({ text: age !== null && age > STALE_RUN_MS ? "可能已停" : `别的会话${it.reportedAt !== "" ? ` · ${shortTime(it.reportedAt)}` : ""}`, rank: 0 });
   }
+  if (seen)
+    out.push({ text: "已看", rank: 0 });
   return out;
+}
+function fitTags(all, budget) {
+  const keep = new Set;
+  let used = 0;
+  for (const n of all.map((_, k) => k).sort((x, y) => all[x].rank - all[y].rank || x - y)) {
+    const w = 1 + cellWidth(all[n].text);
+    if (used + w > budget)
+      continue;
+    keep.add(n);
+    used += w;
+  }
+  return { tags: all.filter((_, k) => keep.has(k)).map((t) => t.text), used };
 }
 function dependsText(b, it) {
   const byId = new Map;
@@ -581,8 +603,10 @@ function itemRow(c, it) {
   const seen = it.status === "review" && !isWaiting(vm.local, it);
   const ic = seen ? { dim: true } : iconColor(it, vm);
   const spin = it.status === "running" ? spinner(c, `spin:${it.id}`, isMine(it, vm)) : null;
-  const tags = [...rowTags(vm, it), ...seen ? ["已看"] : []];
   const rowBg = rippleBg(c, it.id, itemRipple(it.status));
+  const avail = innerWidth(c) - ITEM_INDENT - 2 - 1;
+  const { tags, used } = fitTags(rowTags(vm, it, seen), avail - Math.min(cellWidth(it.title), Math.floor(avail / 2)));
+  const room = avail - used;
   return h(Box, {
     flexDirection: "column",
     ...rowBg === undefined ? {} : { backgroundColor: rowBg }
@@ -603,9 +627,13 @@ function itemRow(c, it) {
   }, seen ? "◇" : STATUS_ICON[it.status]), h(Text, {
     dimColor: seen,
     wrap: "truncate-end"
-  }, ` ${clip(it.title, 120)}`))), tags.map((t) => h(Text, {
+  }, ` ${fitCells(it.title, Math.max(8, room))}`))), tags.length > 0 && h(Box, {
+    flexDirection: "row",
+    columnGap: 1,
+    flexShrink: 0
+  }, tags.map((t) => h(Text, {
     dimColor: true
-  }, t))), open && details(c, it));
+  }, t)))), open && details(c, it));
 }
 function linkName(l) {
   const base = l.type === "path" ? l.target.replace(/\/+$/, "").split("/").pop() ?? l.target : l.target;
@@ -616,11 +644,12 @@ function linkRow(c, key, l, prefix, ownerId) {
   const { vm } = c;
   const acts = linkActions(l, vm.root, vm.platform, vm.hasCode, vm.home);
   const gone = l.type === "path" && vm.missing.has(resolveTarget(l.target, vm.root, vm.home));
-  const name = `${prefix}${linkName(l)}${gone ? "（文件不存在）" : ""}`;
+  const missingNote = gone ? "（文件不存在）" : "";
   const opener = acts.find((a) => a.kind === "open");
+  const labelOf = (a) => vm.hover || a.kind !== "copy" || l.type === "command" ? a.label : "复制";
   const btn = (a) => h(Button, {
     key: `${key}:${a.kind}`,
-    label: vm.hover || a.kind !== "copy" || l.type === "command" ? a.label : "复制",
+    label: labelOf(a),
     dimColor: gone && a.kind !== "copy",
     onPress: (press) => c.actions.link(a, press.surface)
   });
@@ -631,6 +660,9 @@ function linkRow(c, key, l, prefix, ownerId) {
     label: "×",
     onPress: () => c.actions.hideLink(ownerId, l.target)
   });
+  const standing = vm.hover ? fixed : [...fixed, ...extra];
+  const btnCells = standing.reduce((n, a) => n + 1 + cellWidth(`[ ${labelOf(a)} ]`), 0) + (vm.hover ? 0 : 1 + cellWidth("[ × ]"));
+  const shown = `${fitCells(`${prefix}${linkName(l)}`, Math.max(8, innerWidth(c) - LINK_INDENT - btnCells - cellWidth(missingNote) - 1))}${missingNote}`;
   return h(Box, {
     flexDirection: "row",
     columnGap: 1,
@@ -641,7 +673,7 @@ function linkRow(c, key, l, prefix, ownerId) {
   }, opener === undefined ? h(Text, {
     dimColor: gone,
     wrap: "truncate-end"
-  }, name) : h(Button, {
+  }, shown) : h(Button, {
     key: `${key}:open`,
     plain: true,
     dimColor: gone,
@@ -649,19 +681,25 @@ function linkRow(c, key, l, prefix, ownerId) {
   }, h(Text, {
     dimColor: gone,
     wrap: "truncate-end"
-  }, name))), fixed.map(btn), vm.hover ? h(Box, {
+  }, shown))), h(Box, {
+    flexDirection: "row",
+    columnGap: 1,
+    flexShrink: 0
+  }, fixed.map(btn), !vm.hover && [...extra.map(btn), hide]), vm.hover && h(Box, {
     position: "absolute",
     right: 0,
     top: 0,
     display: "none",
     hover: { display: "flex" },
     columnGap: 1
-  }, extra.map(btn), hide) : [...extra.map(btn), hide]);
+  }, extra.map(btn), hide));
 }
 function details(c, it) {
   const { Box, Text } = c.els;
   const b = c.vm.board;
   const lines = [];
+  if (it.owner !== "")
+    lines.push(`负责：${clip(it.owner, 200)}`);
   if (it.status === "running" && !isMine(it, c.vm))
     lines.push(`别的会话报告在跑${it.reportedAt !== "" ? ` · ${shortTime(it.reportedAt)}` : ""} · 未核实`);
   if (it.waitingFor !== "")
