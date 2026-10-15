@@ -437,7 +437,7 @@ export const register: Register = (on, options) => {
       await s.locate().catch(() => null)
       cur = s.current()
     }
-    return runCommand(e.args, cur.board, {
+    const r = await runCommand(e.args, cur.board, {
       error: cur.error,
       root: cur.root,
       init: async type => {
@@ -455,6 +455,10 @@ export const register: Register = (on, options) => {
         return openBoard($, wantsPane(lastScreen, setting), landsDocked({ isFullscreen: lastFullscreen, columns: lastScreen?.columns ?? 0 }))
       },
     })
+    if (!r.userOnly) return { text: r.text }
+    // A listing is for the person: a notice row the model never reads, and no command output.
+    await $.session.append({ message: { type: 'system', content: [{ type: 'text', text: r.text }] } })
+    return {}
   })
 
   // The same system-prompt text every turn: built once per conversation, kept in $.state.
@@ -472,6 +476,7 @@ export const register: Register = (on, options) => {
 
   // What changed behind Claude's back, and the bookkeeping nudge, ride on the user's next message.
   on('prompt.submit', async ($, e, next) => {
+    if (e.origin.kind === 'task-notification') sync?.notified(e.text, e.turnId !== undefined)
     if (isUserSubmission(e)) void touch($, view)
     if (sync === null || !isUserSubmission(e)) return next(e)
     const owed = await sync.takeForSubmit().catch(() => [])
@@ -484,7 +489,8 @@ export const register: Register = (on, options) => {
   })
 
   on('turn.complete', async (_$, e, next) => {
-    if (e.agentId === undefined && sync !== null) await sync.turnComplete()
+    if (e.agentId !== undefined) sync?.agentFinished(e.agentId)
+    else if (sync !== null) await sync.turnComplete()
     return next(e)
   })
 

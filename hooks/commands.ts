@@ -1,9 +1,9 @@
 import type { Board, Decision, Goal } from './model/types'
 
-/** Command output goes into the conversation, so a page stays small. */
+/** A page fits on one terminal screen; the footer names the command for the next one. */
 export const PAGE_LINES = 40
 export const PAGE_CHARS = 3000
-/** One line is cut here; the full text is one board_get away. */
+/** One line is cut here, so one long entry cannot take over a page. */
 const LINE_CHARS = 300
 /** The header and the footer take these out of a page; the body gets the rest. */
 const HEADER_FOOTER_LINES = 2
@@ -20,7 +20,11 @@ export type CommandCtx = {
   toggle: () => Promise<string>
 }
 
-export type CommandResult = { text: string }
+/** `userOnly`: shown to the person and kept out of the model's context (the listings); otherwise a plain answer. */
+export type CommandResult = { text: string; userOnly: boolean }
+
+const answer = (text: string): CommandResult => ({ text, userOnly: false })
+const shown = (text: string): CommandResult => ({ text, userOnly: true })
 
 const USAGE = [
   '/board 用法：',
@@ -73,12 +77,12 @@ export function paginate(lines: string[]): string[][] {
 /** One page of a listing: header, the lines of the page, and the command for the next page. */
 function listing(title: string, command: string, lines: string[], count: number, unit: string, empty: string, page: number): CommandResult {
   const pages = paginate(lines)
-  if (pages.length === 0) return { text: `${title}：${empty}` }
-  if (page > pages.length) return { text: `${title}只有 ${pages.length} 页（共 ${count} ${unit}）。看第一页：${command}` }
+  if (pages.length === 0) return shown(`${title}：${empty}`)
+  if (page > pages.length) return shown(`${title}只有 ${pages.length} 页（共 ${count} ${unit}）。看第一页：${command}`)
   const body = pages[page - 1] ?? []
   const head = `${title} · 共 ${count} ${unit}${pages.length > 1 ? ` · 第 ${page}/${pages.length} 页` : ''}`
   const next = page < pages.length ? `\n下一页：${command} ${page + 1}` : ''
-  return { text: `${head}\n${body.join('\n')}${next}` }
+  return shown(`${head}\n${body.join('\n')}${next}`)
 }
 
 const kindLabel = (d: Decision): string => (d.kind === 'user' ? '用户定' : 'AI 代做')
@@ -107,9 +111,9 @@ function decisions(board: Board, rest: string): CommandResult {
     const hits: Goal[] = exact.length > 0 ? exact : board.goals.filter(g => g.title.includes(filter))
     if (hits.length === 0) {
       const names = board.goals.map(g => g.title).join('、')
-      return { text: `没有名为「${filter}」的进行中目标。${names ? `现有目标：${names}。` : ''}已关闭目标的决策用 /board 归档 ${filter} 查。` }
+      return shown(`没有名为「${filter}」的进行中目标。${names ? `现有目标：${names}。` : ''}已关闭目标的决策用 /board 归档 ${filter} 查。`)
     }
-    if (hits.length > 1) return { text: `「${filter}」对应多个目标：${hits.map(g => g.title).join('、')}。请写完整一点。` }
+    if (hits.length > 1) return shown(`「${filter}」对应多个目标：${hits.map(g => g.title).join('、')}。请写完整一点。`)
     const goal = hits[0] as Goal
     pool = pool.filter(d => d.goalId === goal.id)
     title = `决策 · ${goal.title}`
@@ -167,24 +171,24 @@ function archive(board: Board, rest: string): CommandResult {
   return listing(title, command, lines, lines.length, '条', filter === '' ? '还没有归档内容。' : '没有匹配的归档内容。', page)
 }
 
-/** `/board <args>`. The listings are pure; init and the toggle go through ctx. */
+/** `/board <args>`. The listings are pure and shown to the person only; init and the toggle go through ctx. */
 export async function runCommand(args: string, board: Board | null, ctx: CommandCtx): Promise<CommandResult> {
   const trimmed = args.trim()
   const m = /^(\S+)\s*(.*)$/s.exec(trimmed)
   const sub = m?.[1] ?? ''
   const rest = (m?.[2] ?? '').trim()
   const known = ['决策', '约定', '资料', '归档', 'init'].includes(sub)
-  if (trimmed !== '' && !known) return { text: USAGE }
+  if (trimmed !== '' && !known) return shown(USAGE)
   if (sub === 'init') {
-    if (board !== null || ctx.error !== null || ctx.root !== null) return { text: `看板已存在：${ctx.root ?? ''}/ai/board.json${ctx.error ? `（${ctx.error}）` : ''}` }
+    if (board !== null || ctx.error !== null || ctx.root !== null) return answer(`看板已存在：${ctx.root ?? ''}/ai/board.json${ctx.error ? `（${ctx.error}）` : ''}`)
     try {
-      return { text: await ctx.init(rest) }
+      return answer(await ctx.init(rest))
     } catch (e) {
-      return { text: `创建看板失败：${(e as Error).message}` }
+      return answer(`创建看板失败：${(e as Error).message}`)
     }
   }
-  if (board === null) return { text: ctx.error ?? NOT_ENABLED }
-  if (trimmed === '') return { text: await ctx.toggle() }
+  if (board === null) return trimmed === '' ? answer(ctx.error ?? NOT_ENABLED) : shown(ctx.error ?? NOT_ENABLED)
+  if (trimmed === '') return answer(await ctx.toggle())
   switch (sub) {
     case '决策':
       return decisions(board, rest)

@@ -13,6 +13,8 @@ export type Fake = {
   commands: Map<string, any>
   notices: string[]
   messages: any[]
+  entries: Array<{ customType: string; data: any }>
+  entryRenderers: Map<string, (entry: any, options: any, theme: any) => unknown>
   widgets: Array<{ key: string; content: unknown }>
   fire(event: string, payload?: Record<string, unknown>): Promise<any[]>
   call(tool: string, params: Record<string, unknown>): Promise<string>
@@ -38,6 +40,8 @@ export async function fakePi(opts: { board?: boolean; child?: boolean; mode?: 't
   const commands = new Map<string, any>()
   const notices: string[] = []
   const messages: any[] = []
+  const entries: Fake['entries'] = []
+  const entryRenderers: Fake['entryRenderers'] = new Map()
   const widgets: Fake['widgets'] = []
   const ctx = {
     cwd: dir,
@@ -58,6 +62,8 @@ export async function fakePi(opts: { board?: boolean; child?: boolean; mode?: 't
     registerTool: (t: any) => void tools.set(t.name, t),
     registerCommand: (name: string, o: any) => void commands.set(name, o),
     sendMessage: async (m: any) => void messages.push(m),
+    appendEntry: (customType: string, data: any) => void entries.push({ customType, data }),
+    registerEntryRenderer: (customType: string, r: any) => void entryRenderers.set(customType, r),
   }
   projectBoard(pi as never)
   if (prevChild === undefined) delete process.env.PI_SUBAGENT_CHILD
@@ -75,6 +81,8 @@ export async function fakePi(opts: { board?: boolean; child?: boolean; mode?: 't
     commands,
     notices,
     messages,
+    entries,
+    entryRenderers,
     widgets,
     fire,
     call: async (tool, params) => {

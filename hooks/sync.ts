@@ -25,20 +25,35 @@ export function formatUntold(lines: readonly string[]): string {
 /** Counts what the main session did in one turn. */
 export class TurnCounter {
   private agents = 0
+  private results = 0
+  private opening = 0
   private board = 0
   constructor(private readonly names: ToolNames = CLAUDE_TOOLS) {}
   reset(): void {
     this.agents = 0
+    this.results = this.opening
+    this.opening = 0
     this.board = 0
+  }
+  /** Sub-agent results reaching the main session: delivered into the running turn, or opening the next one. */
+  received(n: number, intoRunningTurn: boolean): void {
+    if (intoRunningTurn) this.results += n
+    else this.opening += n
   }
   /** `isBoardWrite` marks a successful board write; any other call is classified by tool name. */
   count(toolName: string, isBoardWrite: boolean): void {
     if (isBoardWrite) this.board++
     else if (this.names.agent.has(toolName)) this.agents++
   }
-  verdict(): { stale: boolean; agents: number } {
-    return { stale: this.agents > 0 && this.board === 0, agents: this.agents }
+  verdict(): { stale: boolean; agents: number; results: number } {
+    return { stale: this.agents + this.results > 0 && this.board === 0, agents: this.agents, results: this.results }
   }
+}
+
+/** The end-of-turn nudge for a turn that spawned agents or took in their results without writing the board. */
+export function reminderText(v: { agents: number; results: number }): string {
+  const did = [v.agents > 0 ? `派了 ${v.agents} 个 agent` : '', v.results > 0 ? `收到 ${v.results} 个 agent 的结果` : ''].filter(Boolean).join('、')
+  return `上一轮${did}，看板未更新；如有进展请补记`
 }
 
 const ACTOR_LABEL = { external: '外部', main: '主会话', agent: '子 agent', user: '用户' } as const
@@ -50,6 +65,8 @@ const ACTOR_LABEL = { external: '外部', main: '主会话', agent: '子 agent',
 export class Sync {
   readonly turn: TurnCounter
   private tail: Promise<unknown> = Promise.resolve()
+  /** Sub-agents whose run ended and whose result has not reached the main session yet. */
+  private finished: string[] = []
 
   constructor(
     private readonly host: Host,
@@ -153,13 +170,26 @@ export class Sync {
     })
   }
 
+  /** A sub-agent's run ended; its result reaches the main session later, in a notification naming its id. */
+  agentFinished(agentId: string): void {
+    if (!this.finished.includes(agentId)) this.finished.push(agentId)
+  }
+
+  /** A background task's notification was submitted: the sub-agents it names count as results of the turn it lands in. */
+  notified(text: string, intoRunningTurn: boolean): void {
+    const named = this.finished.filter(id => text.includes(id))
+    if (named.length === 0) return
+    this.finished = this.finished.filter(id => !named.includes(id))
+    this.turn.received(named.length, intoRunningTurn)
+  }
+
   /** A main-session turn ended: decide whether the board fell behind. */
   turnComplete(): Promise<void> {
     return this.serial(async () => {
       const v = this.turn.verdict()
       if (!v.stale) return
       await this.host.setState('stale', true)
-      await this.host.setState('reminder', `上一轮派了 ${v.agents} 个 agent，看板未更新；如有进展请补记`)
+      await this.host.setState('reminder', reminderText(v))
     })
   }
 }

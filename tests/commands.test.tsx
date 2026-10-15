@@ -259,6 +259,17 @@ describe('/board with no board, bad files, init and unknown words', () => {
     const usage = await run('帮助', boardWith())
     for (const w of ['决策', '约定', '资料', '归档', 'init']) expect(usage).toContain(w)
   })
+
+  test('listings, their misses and the usage are for the person only; the toggle and init are plain answers', async () => {
+    const only = async (args: string, board: Board | null, over: Partial<CommandCtx> = {}) => (await runCommand(args, board, ctxOf(over))).userOnly
+    const b = boardWith({ goals: [goal('g-car', '车辆')] })
+    for (const a of ['决策', '决策 车辆', '决策 没有', '约定', '约定 9', '资料', '归档', '归档 x', '帮助']) expect(await only(a, b)).toBe(true)
+    expect(await only('约定', null, { root: null })).toBe(true)
+    expect(await only('', b)).toBe(false)
+    expect(await only('', null, { root: null })).toBe(false)
+    expect(await only('init', null, { root: null })).toBe(false)
+    expect(await only('init', b)).toBe(false)
+  })
 })
 
 // ---------- through the engine ----------
@@ -271,10 +282,11 @@ type World = {
   closes: string[]
   panes: Array<{ id: string; title: string; isShown: boolean; isFocused: boolean; isPlaced: boolean }>
   placeOk: boolean
+  appended: Array<{ type: string; text: string }>
 }
 
 function world(on: On, initial: Board | null): World {
-  const w: World = { files: new Map(), registered: [], commands: [], opens: [], closes: [], panes: [], placeOk: true }
+  const w: World = { files: new Map(), registered: [], commands: [], opens: [], closes: [], panes: [], placeOk: true, appended: [] }
   let tick = 1000
   const put = (p: string, text: string) => w.files.set(p, { text, mtime: ++tick })
   if (initial !== null) put(BOARD, serializeBoard(initial))
@@ -307,6 +319,11 @@ function world(on: On, initial: Board | null): World {
     return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('ui.toast', () => ({ value: undefined }))
+  on('session.append', (_$, e, next) => {
+    const block = e.message.content[0] as { text?: string } | undefined
+    w.appended.push({ type: e.message.type, text: block?.text ?? '' })
+    return next(e)
+  })
   on('ui.panes', () => ({ value: w.panes }))
   on('ui.open', (_$, e) => {
     w.opens.push(e.id)
@@ -356,21 +373,36 @@ describe('/board through the engine', () => {
     expect(w.commands).toEqual(['board'])
   })
 
-  test('/board 约定 and /board 决策 车辆 answer with text and no model turn', async ($, on) => {
-    world(on, sample())
+  test('/board 约定 and /board 决策 车辆 show a notice the model never reads, and print no command output', async ($, on) => {
+    const w = world(on, sample())
     mock.clock(on)
     await $.session.start(START)
     const r = await slash($, '约定')
-    expect(r.text).toContain('管线只用 rebuild.sh')
+    expect(r.text).toBeUndefined()
+    expect(r).not.toHaveProperty('context')
     const d = await slash($, '决策 车辆')
-    expect(d.text).toContain('[车辆] 车全部自建')
+    expect(d.text).toBeUndefined()
+    expect(w.appended).toHaveLength(2)
+    expect(w.appended.every(a => a.type === 'system')).toBe(true)
+    expect(w.appended[0]?.text).toContain('管线只用 rebuild.sh')
+    expect(w.appended[1]?.text).toContain('[车辆] 车全部自建')
   })
 
-  test('without a board the answer points at /board init', async ($, on) => {
-    world(on, null)
+  test('without a board the notice points at /board init', async ($, on) => {
+    const w = world(on, null)
     mock.clock(on)
     await $.session.start(START)
-    expect((await slash($, '约定')).text).toContain('/board init')
+    expect((await slash($, '约定')).text).toBeUndefined()
+    expect(w.appended[0]?.text).toContain('/board init')
+  })
+
+  test('the bare toggle and init still answer as command output, with no notice', async ($, on) => {
+    const w = world(on, null)
+    mock.clock(on)
+    await $.session.start(START)
+    expect((await slash($, '')).text).toContain('/board init')
+    expect((await slash($, 'init')).text).toContain('已创建 ai/board.json')
+    expect(w.appended).toEqual([])
   })
 
   test('/board init miniapp creates ai/board.json with the type and the directory name, and the full tool set appears', async ($, on) => {
@@ -385,7 +417,8 @@ describe('/board through the engine', () => {
     expect(b.project).toEqual({ name: '记账 小程序', type: 'miniapp' })
     expect(w.registered).toEqual(['board_init', 'board_get', 'board_update', 'board_propose', 'board_init'])
     // the board is now live: listings work without a restart
-    expect((await slash($, '约定')).text).toBe('约定：还没有约定。')
+    await slash($, '约定')
+    expect(w.appended.at(-1)?.text).toBe('约定：还没有约定。')
     expect((await slash($, 'init')).text).toContain('看板已存在')
   })
 

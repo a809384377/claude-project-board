@@ -57,6 +57,36 @@ const DOCK_FROM_COLUMNS = 100
 type Tui = { requestRender(force?: boolean): void; terminal: { columns: number; rows: number } }
 type Themed = { appearance?: string }
 
+type Component = { render(width: number): string[]; invalidate(): void }
+type Paint = (text: string) => string
+type Container = Component & { addChild(c: Component): void }
+type ListingLib = {
+  Box: new (paddingX: number, paddingY: number, bg: Paint) => Container
+  Text: new (text: string, paddingX: number, paddingY: number) => Component
+  Spacer: new (lines: number) => Component
+  Markdown: new (text: string, paddingX: number, paddingY: number, theme: unknown, style: { color: Paint }) => Component
+  getMarkdownTheme: () => unknown
+}
+type ListingTheme = { fg(token: string, text: string): string; bg(token: string, text: string): string }
+
+let listingLib: ListingLib | null = null
+void Promise.all([import('@earendil-works/pi-tui'), import('@earendil-works/pi-coding-agent')])
+  .then(([tui, agent]) => {
+    listingLib = { ...(tui as unknown as Omit<ListingLib, 'getMarkdownTheme'>), getMarkdownTheme: (agent as unknown as ListingLib).getMarkdownTheme }
+  })
+  .catch(() => undefined)
+
+/** A /board listing drawn the way pi draws an extension's message: a tinted card with the label over the markdown. */
+function listingCard(text: string, theme: ListingTheme): Component | undefined {
+  const lib = listingLib
+  if (lib === null) return undefined
+  const box = new lib.Box(1, 1, t => theme.bg('customMessageBg', t))
+  box.addChild(new lib.Text(theme.fg('customMessageLabel', `\x1b[1m[${COMMAND_TYPE}]\x1b[22m`), 0, 0))
+  box.addChild(new lib.Spacer(1))
+  box.addChild(new lib.Markdown(text, 0, 0, lib.getMarkdownTheme(), { color: t => theme.fg('customMessageText', t) }))
+  return box
+}
+
 /** Everything one pi session keeps for the board; made at session_start, dropped at session_shutdown. */
 class Runtime {
   readonly store: BoardStore
@@ -307,6 +337,9 @@ export default function projectBoard(pi: ExtensionAPI): void {
     await r.refresh()
   })
 
+  // Listings are custom entries: drawn in the transcript and kept in the session, never sent to the model.
+  pi.registerEntryRenderer<{ text: string }>(COMMAND_TYPE, (entry, _options, theme) => listingCard(entry.data?.text ?? '', theme as unknown as ListingTheme))
+
   pi.registerCommand('board', {
     description: '项目看板：打开 / 收起，决策、约定、资料、归档，init 创建',
     getArgumentCompletions: prefix => {
@@ -325,7 +358,7 @@ export default function projectBoard(pi: ExtensionAPI): void {
         await r.store.locate().catch(() => null)
         cur = r.store.current()
       }
-      const { text } = await runCommand(args, cur.board, {
+      const { text, userOnly } = await runCommand(args, cur.board, {
         error: cur.error,
         root: cur.root,
         init: async type => {
@@ -337,10 +370,8 @@ export default function projectBoard(pi: ExtensionAPI): void {
         },
         toggle: async () => r.toggle(),
       })
-      // Listings go into the conversation, where the AI sees them on its next turn; the rest is a notice.
-      const t = args.trim()
-      if (t === '' || t.startsWith('init')) ctx.ui.notify(text, 'info')
-      else await pi.sendMessage({ customType: COMMAND_TYPE, content: text, display: true })
+      if (userOnly) pi.appendEntry<{ text: string }>(COMMAND_TYPE, { text })
+      else ctx.ui.notify(text, 'info')
     },
   })
 }

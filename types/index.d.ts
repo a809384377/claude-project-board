@@ -7,7 +7,7 @@ declare module 'claude-code' {
       snapshot: string | null
       /** Changes Claude has not been told about, one line each. */
       untold: string[]
-      /** The last main-session turn changed files or spawned agents without updating the board. */
+      /** The last main-session turn spawned agents, or took in their results, without updating the board. */
       stale: boolean
       /** Bookkeeping nudge attached to the user's next message; empty when none. */
       reminder: string

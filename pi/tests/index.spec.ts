@@ -171,13 +171,15 @@ describe('/board', () => {
     expect(f.tools.has('board_get')).toBe(true)
   })
 
-  test('a listing goes into the conversation; no argument toggles and says so', async () => {
+  test('a listing is a custom entry, not a message for the model; no argument toggles and says so', async () => {
     const f = await make()
     await f.call('board_update', { ops: [{ op: 'rule.add', text: '提交前跑测试', group: '流程' }] })
     await f.command('board', '约定')
-    expect(f.messages).toHaveLength(1)
-    expect(f.messages[0].content).toContain('提交前跑测试')
-    expect(f.messages[0].display).toBe(true)
+    expect(f.messages).toHaveLength(0)
+    expect(f.entries).toHaveLength(1)
+    expect(f.entries[0]?.customType).toBe('project-board')
+    expect(f.entries[0]?.data.text).toContain('提交前跑测试')
+    expect(f.entryRenderers.has('project-board')).toBe(true)
     await f.command('board', '')
     expect(f.notices.at(-1)).toBe('已收起看板')
     await f.command('board', '')
@@ -187,7 +189,15 @@ describe('/board', () => {
   test('without a board it says how to create one', async () => {
     const f = await make({ board: false })
     await f.command('board', '约定')
-    expect(f.messages[0].content).toContain('/board init')
+    expect(f.messages).toHaveLength(0)
+    expect(f.entries[0]?.data.text).toContain('/board init')
+  })
+
+  test('an unknown word shows the usage as an entry too', async () => {
+    const f = await make()
+    await f.command('board', '帮助')
+    expect(f.messages).toHaveLength(0)
+    expect(f.entries[0]?.data.text).toContain('/board 用法')
   })
 
   test('argument completion offers the subcommands', async () => {

@@ -7,7 +7,7 @@ import { emptyBoard, parseBoard, serializeBoard } from '../hooks/model/parse'
 import { buildSnapshot, RULES_TEXT, SNAPSHOT_LIMIT } from '../hooks/model/summary'
 import type { Board, Goal, Item } from '../hooks/model/types'
 import { BoardStore } from '../hooks/store'
-import { formatUntold, isUserSubmission, Sync, TurnCounter } from '../hooks/sync'
+import { formatUntold, isUserSubmission, reminderText, Sync, TurnCounter } from '../hooks/sync'
 
 const PROJ = '/proj'
 const BOARD = `${PROJ}/ai/board.json`
@@ -560,6 +560,88 @@ describe('end-of-turn bookkeeping check', () => {
     expect(await stateOf($, 'stale')).toBe(false)
   })
 
+  const notify = ($: any, agentId: string, over: Record<string, unknown> = {}) =>
+    submit($, { text: `<task-notification>\n<task-id>${agentId}</task-id>\n<status>completed</status>\n</task-notification>`, origin: { kind: 'task-notification' }, ...over })
+
+  test("a turn opened by a sub-agent's result that writes nothing owes the nudge", async ($, on) => {
+    world(on, small())
+    mock.clock(on)
+    await $.session.start(START)
+    await sectionText($)
+    await turnStart($)
+    await spawn($)
+    await update($, [{ op: 'item.update', id: 'i-b', status: 'doing' }])
+    await turnComplete($)
+    await turnComplete($, 'ta', 'a7f3c2e9')
+    expect(await stateOf($, 'stale')).toBe(false)
+    // the notification itself carries nothing; the nudge rides on the person's next message
+    expect((await notify($, 'a7f3c2e9')).context).toBe(undefined)
+    await turnStart($, 't2')
+    await turnComplete($, 't2')
+    expect(await stateOf($, 'stale')).toBe(true)
+    expect((await submit($)).context).toEqual(['上一轮收到 1 个 agent 的结果，看板未更新；如有进展请补记'])
+  })
+
+  test("a turn opened by a sub-agent's result that writes the board owes nothing", async ($, on) => {
+    world(on, small())
+    mock.clock(on)
+    await $.session.start(START)
+    await sectionText($)
+    await turnComplete($, 'ta', 'a7f3c2e9')
+    await notify($, 'a7f3c2e9')
+    await turnStart($, 't2')
+    await update($, [{ op: 'item.update', id: 'i-b', status: 'review' }])
+    await turnComplete($, 't2')
+    expect(await stateOf($, 'stale')).toBe(false)
+    expect((await submit($)).context).toBe(undefined)
+  })
+
+  test('a notification that names no finished sub-agent (a background shell) counts nothing', async ($, on) => {
+    world(on, small())
+    mock.clock(on)
+    await $.session.start(START)
+    await sectionText($)
+    await turnComplete($, 'ta', 'a7f3c2e9')
+    await notify($, 'b9shell01')
+    await turnStart($, 't2')
+    await turnComplete($, 't2')
+    expect(await stateOf($, 'stale')).toBe(false)
+  })
+
+  test("the person's own turn is unchanged: a finished sub-agent alone owes nothing, and each result counts once", async ($, on) => {
+    world(on, small())
+    mock.clock(on)
+    await $.session.start(START)
+    await sectionText($)
+    await turnComplete($, 'ta', 'a7f3c2e9')
+    await submit($, { text: '看看 a7f3c2e9 的结果' })
+    await turnStart($, 't2')
+    await turnComplete($, 't2')
+    expect(await stateOf($, 'stale')).toBe(false)
+    await notify($, 'a7f3c2e9')
+    await turnStart($, 't3')
+    await turnComplete($, 't3')
+    expect(await stateOf($, 'stale')).toBe(true)
+    await update($, [{ op: 'item.update', id: 'i-b', note: '记了' }])
+    await notify($, 'a7f3c2e9')
+    await turnStart($, 't4')
+    await turnComplete($, 't4')
+    expect(await stateOf($, 'stale')).toBe(false)
+  })
+
+  test('a result delivered into a running turn counts for that turn, beside its own spawns', async ($, on) => {
+    world(on, small())
+    mock.clock(on)
+    await $.session.start(START)
+    await sectionText($)
+    await turnStart($)
+    await spawn($)
+    await turnComplete($, 'ta', 'a7f3c2e9')
+    await notify($, 'a7f3c2e9', { turnId: 't1' })
+    await turnComplete($)
+    expect((await submit($)).context).toEqual(['上一轮派了 1 个 agent、收到 1 个 agent 的结果，看板未更新；如有进展请补记'])
+  })
+
   test('turn.start resets the counts', async ($, on) => {
     world(on, small())
     mock.clock(on)
@@ -576,19 +658,34 @@ describe('end-of-turn bookkeeping check', () => {
 // ---------- pure pieces ----------
 
 describe('pure pieces', () => {
-  test('TurnCounter verdict counts agent spawns only', () => {
+  test('TurnCounter verdict counts agent spawns and agent results', () => {
     const c = new TurnCounter()
-    expect(c.verdict()).toEqual({ stale: false, agents: 0 })
+    expect(c.verdict()).toEqual({ stale: false, agents: 0, results: 0 })
     c.count('Write', false)
     c.count('NotebookEdit', false)
     c.count('Bash', false)
-    expect(c.verdict()).toEqual({ stale: false, agents: 0 })
+    expect(c.verdict()).toEqual({ stale: false, agents: 0, results: 0 })
     c.count('Agent', false)
-    expect(c.verdict()).toEqual({ stale: true, agents: 1 })
+    expect(c.verdict()).toEqual({ stale: true, agents: 1, results: 0 })
     c.count('', true)
     expect(c.verdict().stale).toBe(false)
     c.reset()
-    expect(c.verdict()).toEqual({ stale: false, agents: 0 })
+    expect(c.verdict()).toEqual({ stale: false, agents: 0, results: 0 })
+    c.received(2, true)
+    expect(c.verdict()).toEqual({ stale: true, agents: 0, results: 2 })
+    // a result that opens the next turn waits for that turn
+    c.received(1, false)
+    expect(c.verdict().results).toBe(2)
+    c.reset()
+    expect(c.verdict()).toEqual({ stale: true, agents: 0, results: 1 })
+    c.reset()
+    expect(c.verdict().results).toBe(0)
+  })
+
+  test('reminderText names what the turn did', () => {
+    expect(reminderText({ agents: 2, results: 0 })).toBe('上一轮派了 2 个 agent，看板未更新；如有进展请补记')
+    expect(reminderText({ agents: 0, results: 1 })).toBe('上一轮收到 1 个 agent 的结果，看板未更新；如有进展请补记')
+    expect(reminderText({ agents: 1, results: 3 })).toBe('上一轮派了 1 个 agent、收到 3 个 agent 的结果，看板未更新；如有进展请补记')
   })
 
   test('isUserSubmission', () => {
