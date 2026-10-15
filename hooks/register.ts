@@ -336,6 +336,8 @@ export const register: Register = (on, options) => {
   /** The terminal as the last drawing above the prompt saw it with no pane up; /board decides pane or band from it. */
   let lastScreen: Viewport = undefined
   let lastFullscreen = false
+  /** Whether a person is at the prompt (the REPL), as session.start says; false for `-p` and the SDK. */
+  let interactive = true
   let toolsMode: 'none' | 'init' | 'full' = 'none'
   let toolsTail: Promise<unknown> = Promise.resolve()
   const view = newViewState(options.mascot !== 'off', options.motion !== 'off')
@@ -371,6 +373,7 @@ export const register: Register = (on, options) => {
   const panePlaced = async (sh: Shell): Promise<boolean> => (await sh.panes().catch(() => [])).some(p => p.id === PANE_ID && p.isPlaced)
 
   on('session.start', async ($, e, next) => {
+    interactive = e.isInteractive
     host = hostOf($)
     const h = host
     const board = new BoardStore(host)
@@ -455,7 +458,8 @@ export const register: Register = (on, options) => {
         return openBoard($, wantsPane(lastScreen, setting), landsDocked({ isFullscreen: lastFullscreen, columns: lastScreen?.columns ?? 0 }))
       },
     })
-    if (!r.userOnly) return { text: r.text }
+    // A one-off run (`-p`, the SDK) has no conversation to keep clean and shows only command output.
+    if (!r.userOnly || !interactive) return { text: r.text }
     // A listing is for the person: a notice row the model never reads, and no command output.
     await $.session.append({ message: { type: 'system', content: [{ type: 'text', text: r.text }] } })
     return {}
@@ -514,6 +518,7 @@ export const register: Register = (on, options) => {
         toast: t => h.toast(t),
       })
       if (name === 'board_init') await syncTools().catch(() => undefined)
+      if (agentId !== undefined && name !== 'board_get' && (JSON.parse(result) as { ok: boolean }).ok) sync?.agentWrote(agentId)
       await sync?.flush()
       return { result }
     })

@@ -396,6 +396,14 @@ describe('/board through the engine', () => {
     expect(w.appended[0]?.text).toContain('/board init')
   })
 
+  test('a one-off run (-p, the SDK) prints the listing as command output: there is no conversation to keep it out of', async ($, on) => {
+    const w = world(on, sample())
+    mock.clock(on)
+    await $.session.start({ ...START, surface: null, isInteractive: false })
+    expect((await slash($, '约定')).text).toContain('管线只用 rebuild.sh')
+    expect(w.appended).toEqual([])
+  })
+
   test('the bare toggle and init still answer as command output, with no notice', async ($, on) => {
     const w = world(on, null)
     mock.clock(on)

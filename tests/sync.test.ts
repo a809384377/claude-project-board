@@ -596,6 +596,36 @@ describe('end-of-turn bookkeeping check', () => {
     expect((await submit($)).context).toBe(undefined)
   })
 
+  test('a sub-agent that wrote the board during its run is not waited for; one that did not still is', async ($, on) => {
+    world(on, small())
+    mock.clock(on)
+    await $.session.start(START)
+    await sectionText($)
+    await update($, [{ op: 'item.update', id: 'i-b', status: 'doing' }], 'a7f3c2e9')
+    await turnComplete($, 'ta', 'a7f3c2e9')
+    await notify($, 'a7f3c2e9')
+    await turnStart($, 't2')
+    await turnComplete($, 't2')
+    expect(await stateOf($, 'stale')).toBe(false)
+    // a failed write is not bookkeeping
+    expect((await update($, [{ op: 'item.update', id: 'i-nope', status: 'doing' }], 'c4d5e6f7')).ok).toBe(false)
+    // a read is not either
+    await $.tool.call({ tool: T('board_get'), scope: 'summary', agentId: 'c4d5e6f7' } as never)
+    await turnComplete($, 'tc', 'c4d5e6f7')
+    await notify($, 'c4d5e6f7')
+    await turnStart($, 't3')
+    await turnComplete($, 't3')
+    expect(await stateOf($, 'stale')).toBe(true)
+    // the write counts for that run only: the same agent's next run that writes nothing is waited for again
+    await submit($)
+    await update($, [{ op: 'item.update', id: 'i-b', note: '主会话记了' }])
+    await turnComplete($, 'ta2', 'a7f3c2e9')
+    await notify($, 'a7f3c2e9')
+    await turnStart($, 't4')
+    await turnComplete($, 't4')
+    expect(await stateOf($, 'stale')).toBe(true)
+  })
+
   test('a notification that names no finished sub-agent (a background shell) counts nothing', async ($, on) => {
     world(on, small())
     mock.clock(on)

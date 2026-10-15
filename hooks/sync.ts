@@ -65,8 +65,10 @@ const ACTOR_LABEL = { external: '外部', main: '主会话', agent: '子 agent',
 export class Sync {
   readonly turn: TurnCounter
   private tail: Promise<unknown> = Promise.resolve()
-  /** Sub-agents whose run ended and whose result has not reached the main session yet. */
+  /** Sub-agents whose run ended without writing the board, and whose result has not reached the main session yet. */
   private finished: string[] = []
+  /** Sub-agents that wrote the board during their current run: their result is already on the board. */
+  private wrote = new Set<string>()
 
   constructor(
     private readonly host: Host,
@@ -170,8 +172,17 @@ export class Sync {
     })
   }
 
-  /** A sub-agent's run ended; its result reaches the main session later, in a notification naming its id. */
+  /** A sub-agent wrote the board. */
+  agentWrote(agentId: string): void {
+    this.wrote.add(agentId)
+  }
+
+  /**
+   * A sub-agent's run ended; its result reaches the main session later, in a notification naming its id.
+   * A run that wrote the board has its result recorded already and is not waited for.
+   */
   agentFinished(agentId: string): void {
+    if (this.wrote.delete(agentId)) return
     if (!this.finished.includes(agentId)) this.finished.push(agentId)
   }
 
