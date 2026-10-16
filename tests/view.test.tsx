@@ -594,7 +594,7 @@ for (const surface of SURFACES) {
       // opened, the item folds what was hidden under it
       await ui.press({ key: 'item:i-rev' })
       expect((await ui.find({ key: 'hidden:i-rev' }))?.text).toBe('▸ 已隐藏 2 条')
-      expect(await keys(ui, 'link:i-rev:')).toEqual([`link:i-rev:2:copy`, `link:i-rev:2:hide`])
+      expect(await keys(ui, 'link:i-rev:')).toEqual(surface === 'terminal' ? ['link:i-rev:2:copy', 'link:i-rev:2:hide'] : ['link:i-rev:2:hide', 'link:i-rev:2:copy'])
       await aiWrite($, [{ op: 'item.link.add', id: 'i-rev', link: { type: 'path', kind: '截图', target: 'ai/scratch/shot.png', forReview: true } }])
       await clock.advance(10)
       expect(await keys(ui, 'seen:')).toEqual(['seen:i-rev'])
@@ -617,7 +617,7 @@ for (const surface of SURFACES) {
       void clock
     })
 
-    test('the buttons of a link: its name opens it; without hover [复制] [×] stay on screen and VS Code is left out', async ($, on) => {
+    test('the buttons of a link: [打开] stands at the end and its name opens it too; without hover [复制] [×] stay on screen and VS Code is left out', async ($, on) => {
       world(on, fixture())
       mock.clock(on)
       await $.session.start(START)
@@ -625,21 +625,25 @@ for (const surface of SURFACES) {
       const drawn = JSON.stringify(await ui.drawn())
       if (surface === 'terminal') {
         expect(await keys(ui, 'todo-link:i-rev:')).toEqual([
-          'todo-link:i-rev:0:open', 'todo-link:i-rev:0:vscode', 'todo-link:i-rev:0:copy', 'todo-link:i-rev:0:hide',
-          'todo-link:i-rev:1:open', 'todo-link:i-rev:1:copy', 'todo-link:i-rev:1:hide',
+          'todo-link:i-rev:0:name', 'todo-link:i-rev:0:open', 'todo-link:i-rev:0:vscode', 'todo-link:i-rev:0:copy', 'todo-link:i-rev:0:hide',
+          'todo-link:i-rev:1:name', 'todo-link:i-rev:1:open', 'todo-link:i-rev:1:copy', 'todo-link:i-rev:1:hide',
         ])
-        // everything but the name waits in a box the pointer reveals
+        // everything but the name and [打开] waits in a box the pointer reveals
         expect(drawn).toContain('"key":"lh:todo-link:i-rev:0"')
+        // and shows left of [打开], which stays uncovered
+        expect(drawn).toContain(`"right":${1 + '[ 打开 ]'.length + 2}`)
         expect((await ui.find({ key: 'todo-link:i-rev:0:copy' }))?.props.label).toBe('复制路径')
       } else {
         expect(await keys(ui, 'todo-link:i-rev:')).toEqual([
-          'todo-link:i-rev:0:open', 'todo-link:i-rev:0:copy', 'todo-link:i-rev:0:hide',
-          'todo-link:i-rev:1:open', 'todo-link:i-rev:1:copy', 'todo-link:i-rev:1:hide',
+          'todo-link:i-rev:0:name', 'todo-link:i-rev:0:copy', 'todo-link:i-rev:0:hide', 'todo-link:i-rev:0:open',
+          'todo-link:i-rev:1:name', 'todo-link:i-rev:1:copy', 'todo-link:i-rev:1:hide', 'todo-link:i-rev:1:open',
         ])
         expect(drawn).not.toContain('"hover"')
         expect((await ui.find({ key: 'todo-link:i-rev:0:copy' }))?.props.label).toBe('复制')
       }
-      expect((await ui.find({ key: 'todo-link:i-rev:0:open' }))?.text).toBe('报告 施工报告.md · 第 7 节')
+      // the name is cut to the room the standing buttons leave
+      expect((await ui.find({ key: 'todo-link:i-rev:0:name' }))?.text).toMatch(/^报告 施工报告\.md · /)
+      expect((await ui.find({ key: 'todo-link:i-rev:0:open' }))?.props.label).toBe('打开')
       expect((await ui.find({ key: 'todo-link:i-rev:0:hide' }))?.props.label).toBe('×')
     })
 
@@ -721,13 +725,21 @@ for (const surface of SURFACES) {
       const ui = await pane($, surface)
       expect(await keys(ui, 'link:i-rev:')).toEqual([])
       await ui.press({ key: 'item:i-rev' })
-      expect(await keys(ui, 'link:i-rev:')).toEqual([
-        'link:i-rev:0:open', ...(surface === 'terminal' ? ['link:i-rev:0:vscode'] : []), 'link:i-rev:0:copy', 'link:i-rev:0:hide',
-        'link:i-rev:1:open', 'link:i-rev:1:copy', 'link:i-rev:1:hide',
-        'link:i-rev:2:copy', 'link:i-rev:2:hide',
-      ])
+      expect(await keys(ui, 'link:i-rev:')).toEqual(
+        surface === 'terminal'
+          ? [
+              'link:i-rev:0:name', 'link:i-rev:0:open', 'link:i-rev:0:vscode', 'link:i-rev:0:copy', 'link:i-rev:0:hide',
+              'link:i-rev:1:name', 'link:i-rev:1:open', 'link:i-rev:1:copy', 'link:i-rev:1:hide',
+              'link:i-rev:2:copy', 'link:i-rev:2:hide',
+            ]
+          : [
+              'link:i-rev:0:name', 'link:i-rev:0:copy', 'link:i-rev:0:hide', 'link:i-rev:0:open',
+              'link:i-rev:1:name', 'link:i-rev:1:copy', 'link:i-rev:1:hide', 'link:i-rev:1:open',
+              'link:i-rev:2:hide', 'link:i-rev:2:copy',
+            ],
+      )
       expect((await ui.find({ key: 'link:i-rev:2:copy' }))?.props.label).toBe('复制命令')
-      expect((await ui.find({ key: 'link:i-rev:0:open' }))?.text).toBe('验收 报告 施工报告.md · 第 7 节')
+      expect((await ui.find({ key: 'link:i-rev:0:name' }))?.text).toMatch(/^验收 报告 施工报告\.md · /)
     })
 
     test('the buttons pass absolute paths to open, unchanged, without a shell', async ($, on) => {
@@ -1086,7 +1098,7 @@ describe('goal links, the 待你看 block and ~ paths', () => {
     await $.session.start(START)
     const ui = await pane($, 'terminal')
     expect(await texts(ui, /^资料$/)).toHaveLength(1)
-    expect(await keys(ui, 'link:g-ped:0:')).toEqual(['link:g-ped:0:open', 'link:g-ped:0:vscode', 'link:g-ped:0:copy', 'link:g-ped:0:hide'])
+    expect(await keys(ui, 'link:g-ped:0:')).toEqual(['link:g-ped:0:name', 'link:g-ped:0:open', 'link:g-ped:0:vscode', 'link:g-ped:0:copy', 'link:g-ped:0:hide'])
     await ui.press({ key: 'link:g-ped:0:open' })
     expect(w.runs).toEqual([['open', `${PROJ}/ai/docs/方案0.md`]])
   })
@@ -1101,7 +1113,7 @@ describe('goal links, the 待你看 block and ~ paths', () => {
     expect(await texts(ui, /资料 4 条/)).toHaveLength(1)
     expect(await keys(ui, 'link:g-ped:')).toEqual([])
     await ui.press({ key: 'links:g-ped' })
-    expect(await keys(ui, 'link:g-ped:')).toHaveLength(4 * 4)
+    expect(await keys(ui, 'link:g-ped:')).toHaveLength(4 * 5)
     // 4 goal links, plus the review report in the 待你看 block
     expect(await texts(ui, /文件不存在/)).toHaveLength(4 + 1)
   })
@@ -1129,8 +1141,8 @@ describe('goal links, the 待你看 block and ~ paths', () => {
       expect(await keys(ui, 'todo-approve')).toEqual([])
       // only the entries marked for review, not the command
       expect(await keys(ui, 'todo-link:i-rev:')).toEqual([
-        'todo-link:i-rev:0:open', 'todo-link:i-rev:0:vscode', 'todo-link:i-rev:0:copy', 'todo-link:i-rev:0:hide',
-        'todo-link:i-rev:1:open', 'todo-link:i-rev:1:copy', 'todo-link:i-rev:1:hide',
+        'todo-link:i-rev:0:name', 'todo-link:i-rev:0:open', 'todo-link:i-rev:0:vscode', 'todo-link:i-rev:0:copy', 'todo-link:i-rev:0:hide',
+        'todo-link:i-rev:1:name', 'todo-link:i-rev:1:open', 'todo-link:i-rev:1:copy', 'todo-link:i-rev:1:hide',
       ])
       await ui.unmount()
     }
@@ -1573,7 +1585,11 @@ for (const surface of SURFACES) {
       mock.clock(on)
       await $.session.start(START)
       const ui = await pane($, surface)
-      expect(await keys(ui, 'link:s-B:')).toEqual(['link:s-B:0:open', ...(surface === 'terminal' ? ['link:s-B:0:vscode'] : []), 'link:s-B:0:copy', 'link:s-B:0:hide'])
+      expect(await keys(ui, 'link:s-B:')).toEqual(
+        surface === 'terminal'
+          ? ['link:s-B:0:name', 'link:s-B:0:open', 'link:s-B:0:vscode', 'link:s-B:0:copy', 'link:s-B:0:hide']
+          : ['link:s-B:0:name', 'link:s-B:0:copy', 'link:s-B:0:hide', 'link:s-B:0:open'],
+      )
     })
   })
 }

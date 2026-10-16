@@ -653,7 +653,7 @@ function linkRow(c, key, l, prefix, ownerId) {
     dimColor: gone && a.kind !== "copy",
     onPress: (press) => c.actions.link(a, press.surface)
   });
-  const fixed = opener === undefined ? acts.filter((a) => a.kind === "copy") : [];
+  const fixed = opener === undefined ? acts.filter((a) => a.kind === "copy") : [opener];
   const extra = acts.filter((a) => a !== opener && !fixed.includes(a) && (vm.hover || a.kind !== "vscode"));
   const hide = h(Button, {
     key: `${key}:hide`,
@@ -674,7 +674,7 @@ function linkRow(c, key, l, prefix, ownerId) {
     dimColor: gone,
     wrap: "truncate-end"
   }, shown) : h(Button, {
-    key: `${key}:open`,
+    key: `${key}:name`,
     plain: true,
     dimColor: gone,
     onPress: (press) => c.actions.link(opener, press.surface)
@@ -685,9 +685,9 @@ function linkRow(c, key, l, prefix, ownerId) {
     flexDirection: "row",
     columnGap: 1,
     flexShrink: 0
-  }, fixed.map(btn), !vm.hover && [...extra.map(btn), hide]), vm.hover && h(Box, {
+  }, !vm.hover && [...extra.map(btn), hide], fixed.map(btn)), vm.hover && h(Box, {
     position: "absolute",
-    right: 0,
+    right: btnCells,
     top: 0,
     display: "none",
     hover: { display: "flex" },

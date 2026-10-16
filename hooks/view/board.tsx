@@ -717,9 +717,10 @@ function linkName(l: Link): string {
 }
 
 /**
- * One link. A file or a url opens from its name; a command or a ref has its copy button instead. The other buttons
- * and [×] (hide on this machine) show under the pointer on a surface with hover, and stay on screen elsewhere, without
- * VS Code. `key` names the buttons, so two rows for one link need two keys.
+ * One link. A file or a url has a standing [打开] at the row's end and opens from its name too; a command or a ref has
+ * its copy button there instead. The other buttons and [×] (hide on this machine) show under the pointer on a surface
+ * with hover, left of the standing button, and stay on screen elsewhere, without VS Code. `key` names the buttons, so
+ * two rows for one link need two keys.
  */
 function linkRow(c: Ctx, key: string, l: Link, prefix: string, ownerId: string): RenderElement {
   const { Box, Text, Button } = c.els
@@ -732,8 +733,8 @@ function linkRow(c: Ctx, key: string, l: Link, prefix: string, ownerId: string):
   const btn = (a: LinkAction): RenderElement => (
     <Button key={`${key}:${a.kind}`} label={labelOf(a)} dimColor={gone && a.kind !== 'copy'} onPress={press => c.actions.link(a, press.surface)} />
   )
-  // Without something to open, copying is what the link is for: that button never hides.
-  const fixed = opener === undefined ? acts.filter(a => a.kind === 'copy') : []
+  // Opening, or copying when there is nothing to open, is what the link is for: that button never hides.
+  const fixed = opener === undefined ? acts.filter(a => a.kind === 'copy') : [opener]
   const extra = acts.filter(a => a !== opener && !fixed.includes(a) && (vm.hover || a.kind !== 'vscode'))
   const hide = <Button key={`${key}:hide`} label="×" onPress={() => c.actions.hideLink(ownerId, l.target)} />
   // The buttons that stand on the row keep their columns; the name is cut to the rest, measured from the deepest
@@ -748,17 +749,17 @@ function linkRow(c: Ctx, key: string, l: Link, prefix: string, ownerId: string):
         {opener === undefined ? (
           <Text dimColor={gone} wrap="truncate-end">{shown}</Text>
         ) : (
-          <Button key={`${key}:open`} plain dimColor={gone} onPress={press => c.actions.link(opener, press.surface)}>
+          <Button key={`${key}:name`} plain dimColor={gone} onPress={press => c.actions.link(opener, press.surface)}>
             <Text dimColor={gone} wrap="truncate-end">{shown}</Text>
           </Button>
         )}
       </Box>
       <Box flexDirection="row" columnGap={1} flexShrink={0}>
-        {fixed.map(btn)}
         {!vm.hover && [...extra.map(btn), hide]}
+        {fixed.map(btn)}
       </Box>
       {vm.hover && (
-        <Box position="absolute" right={0} top={0} display="none" hover={{ display: 'flex' }} columnGap={1}>
+        <Box position="absolute" right={btnCells} top={0} display="none" hover={{ display: 'flex' }} columnGap={1}>
           {extra.map(btn)}
           {hide}
         </Box>
